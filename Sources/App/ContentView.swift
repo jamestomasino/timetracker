@@ -97,10 +97,8 @@ struct ContentView: View {
         let entries = vm.entries
         guard !entries.isEmpty else { return }
 
-        let panel = NSOpenPanel()
+        let panel = NSSavePanel()
         panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
         panel.nameFieldStringValue = "time-tracker.csv"
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.prompt = "Export"
