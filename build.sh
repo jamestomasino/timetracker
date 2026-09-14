@@ -26,6 +26,7 @@ CORE_SRC=(
   Sources/Core/BreakReminder.swift
   Sources/Core/SettingsStore.swift
   Sources/Core/TrackerViewModel.swift
+  Sources/Core/ToastCenter.swift
 )
 APP_SRC=(
   Sources/App/TimeTrackerApp.swift
