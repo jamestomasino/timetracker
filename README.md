@@ -21,6 +21,8 @@ stay at the top, and you can search the full list.
   substring.
 - **Persistence**: tasks and their times are saved to disk and restored on launch
   (running tasks keep ticking across relaunches).
+- **Export to CSV**: the **Export** button writes all tracked tasks to a CSV file
+  you choose (RFC-4180 escaped, so titles with commas, quotes, or new lines are safe).
 
 ## Requirements
 
@@ -83,10 +85,27 @@ Tests/
 
 Delete that file to reset all tasks.
 
+## CSV export format
+
+The **Export** button (in the search row) opens a save panel defaulting to
+`time-tracker.csv` and writes one row per task, in the app's natural order:
+
+```
+Title,Created At,Last Activity,Duration (s),Status
+```
+
+- **Title** — the task title, RFC-4180 quoted if it contains a comma, quote, or newline.
+- **Created At / Last Activity** — ISO-8601 UTC timestamps (e.g. `2026-09-14T18:44:00.123Z`).
+- **Duration (s)** — total tracked seconds. For a running task this is
+  `accumulated + (now - runningSince)`; for a stopped task it is the accumulated time.
+- **Status** — `Running` if the task is currently running, otherwise `Stopped`.
+
+The serialization lives in `Sources/Core/CSVExporter.swift` (pure, AppKit-free) and
+is covered by the test suite's `csv export` section.
+
 ## Possible next steps
 
 - Menu-bar / status-item mode.
 - Per-task notes, tags, or projects.
-- Export to CSV.
 - A proper `.xcodeproj` (e.g. via `swift package init`) if you want to open it in
   Xcode and use its test runner — the code is already structured for it.
