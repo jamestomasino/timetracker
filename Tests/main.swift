@@ -114,6 +114,34 @@ approx(engine.entry(id: attr)!.accumulated, 90, "second same-day run adds to acc
 approx(engine.entry(id: attr)!.dayTotals[expectedDay] ?? -1, 90,
        "second same-day run merges into the same day bucket")
 
+// The stop path must honor the *injected* calendar, not Calendar.current.
+// Prove it with a cross-timezone check: the same instant that is still
+// 2026-03-16 in UTC is already 2026-03-17 in Tokyo (UTC+9), so two engines
+// that stop at that instant must attribute the time to different days.
+var utcCal = Calendar(identifier: .gregorian)
+utcCal.timeZone = TimeZone(identifier: "UTC")!
+var tokyoCal = Calendar(identifier: .gregorian)
+tokyoCal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+// Build the boundary instant directly in UTC: 2026-03-16 23:30:00 UTC.
+let utcStop = DateComponents(calendar: utcCal, year: 2026, month: 3, day: 16,
+                             hour: 23, minute: 30, second: 0).date!
+let utcStart = utcStop.addingTimeInterval(-60)
+let engUtc = TimeTrackerEngine(clock: ManualClock(instant: utcStart), calendar: utcCal)
+let engTokyo = TimeTrackerEngine(clock: ManualClock(instant: utcStart), calendar: tokyoCal)
+let aUtc = engUtc.add(title: "TZ", start: true, now: utcStart).id
+let aTokyo = engTokyo.add(title: "TZ", start: true, now: utcStart).id
+engUtc.stop(id: aUtc, now: utcStop)
+engTokyo.stop(id: aTokyo, now: utcStop)
+let utcKey = TimeBuckets.dayKey(for: utcStop, calendar: utcCal)
+let tokyoKey = TimeBuckets.dayKey(for: utcStop, calendar: tokyoCal)
+check(utcKey != tokyoKey, "the boundary instant falls on different days in UTC vs Tokyo")
+check(engUtc.entry(id: aUtc)!.dayTotals[utcKey] == 60,
+      "UTC engine attributes the interval to the UTC day")
+check(engTokyo.entry(id: aTokyo)!.dayTotals[tokyoKey] == 60,
+      "Tokyo engine attributes the interval to the Tokyo day")
+check(engTokyo.entry(id: aTokyo)!.dayTotals[utcKey] == nil,
+      "Tokyo engine does not attribute to the UTC day")
+
 // MARK: - Auto-stop (only one running at a time)
 section("auto-stop")
 reset()

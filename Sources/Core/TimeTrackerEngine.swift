@@ -16,9 +16,14 @@ import Foundation
 public final class TimeTrackerEngine {
     public private(set) var entries: [TimeEntry] = []
     private let clock: Clock
+    /// The calendar used to attribute completed intervals to days. Defaults to
+    /// the user's current calendar (so production behavior is unchanged); tests
+    /// inject a fixed one so the stop path is timezone-deterministic.
+    private let calendar: Calendar
 
-    public init(clock: Clock = SystemClock()) {
+    public init(clock: Clock = SystemClock(), calendar: Calendar = Calendar.current) {
         self.clock = clock
+        self.calendar = calendar
     }
 
     // MARK: - Identity / lookups
@@ -165,7 +170,7 @@ public final class TimeTrackerEngine {
         entries[idx].accumulated += delta
         // Attribute the completed interval to the day(s) it covered so the
         // by-day and by-week exports are correct.
-        let perDay = TimeBuckets.splitByDay(start: since, end: now)
+        let perDay = TimeBuckets.splitByDay(start: since, end: now, calendar: self.calendar)
         for (key, secs) in perDay {
             entries[idx].dayTotals[key, default: 0] += secs
         }
