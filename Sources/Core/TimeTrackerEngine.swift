@@ -1,0 +1,157 @@
+import Foundation
+
+/// The pure state machine for the tracker.
+///
+/// Responsibilities:
+/// - Add a task (optionally start it immediately).
+/// - Start a task, which *stops whichever task is currently running* (only one
+///   task can run at a time).
+/// - Stop a task, folding its running interval into `accumulated`.
+/// - Report the currently running task and live elapsed times.
+/// - Provide ordering ("recent") and search.
+///
+/// The engine is clock-injected so it is fully deterministic under test. It has
+/// no dependency on SwiftUI, AppKit, or the file system — persistence is a
+/// separate concern (see `EntryStore`).
+public final class TimeTrackerEngine {
+    public private(set) var entries: [TimeEntry] = []
+    private let clock: Clock
+
+    public init(clock: Clock = SystemClock()) {
+        self.clock = clock
+    }
+
+    // MARK: - Identity / lookups
+
+    public func entry(id: UUID) -> TimeEntry? {
+        entries.first { $0.id == id }
+    }
+
+    /// The task currently running, if any.
+    public var runningEntry: TimeEntry? {
+        entries.first { $0.runningSince != nil }
+    }
+
+    public var runningID: UUID? {
+        runningEntry?.id
+    }
+
+    // MARK: - Elapsed time
+
+    /// Live elapsed seconds for a task, given an instant.
+    public func elapsed(for entry: TimeEntry, at now: Date) -> TimeInterval {
+        let running = entry.runningSince.map { now.timeIntervalSince($0) } ?? 0
+        return max(0, entry.accumulated + running)
+    }
+
+    // MARK: - Mutations
+
+    /// Add a new task. If `start` is true, it begins running immediately.
+    @discardableResult
+    public func add(title: String, start: Bool = false, now: Date? = nil) -> TimeEntry {
+        let now = now ?? clock.now()
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entry = TimeEntry(
+            title: trimmed,
+            accumulated: 0,
+            runningSince: start ? now : nil,
+            createdAt: now,
+            lastActivityAt: now
+        )
+        // Starting a brand-new task must stop whatever was running.
+        if start { stopRunning(now: now) }
+        entries.append(entry)
+        return entry
+    }
+
+    /// Start a task. Any other running task is stopped first (auto-stop).
+    public func start(id: UUID, now: Date? = nil) {
+        let now = now ?? clock.now()
+        guard let idx = index(of: id) else { return }
+        if entries[idx].runningSince != nil { return } // already running
+        stopRunning(now: now)
+        entries[idx].runningSince = now
+        entries[idx].lastActivityAt = now
+    }
+
+    /// Stop the task with the given id (no-op if it isn't running).
+    public func stop(id: UUID, now: Date? = nil) {
+        let now = now ?? clock.now()
+        guard let idx = index(of: id), entries[idx].runningSince != nil else { return }
+        foldRunning(at: now, idx: idx)
+    }
+
+    /// Stop whichever task is currently running.
+    public func stopRunning(now: Date? = nil) {
+        let now = now ?? clock.now()
+        guard let idx = entries.firstIndex(where: { $0.runningSince != nil }) else { return }
+        foldRunning(at: now, idx: idx)
+    }
+
+    /// Toggle a task: start if stopped, stop if running.
+    public func toggle(id: UUID, now: Date? = nil) {
+        let now = now ?? clock.now()
+        if let idx = index(of: id), entries[idx].runningSince != nil {
+            foldRunning(at: now, idx: idx)
+        } else {
+            start(id: id, now: now)
+        }
+    }
+
+    /// Delete a task (stops it first if it was running).
+    public func delete(id: UUID, now: Date? = nil) {
+        let now = now ?? clock.now()
+        guard let idx = index(of: id) else { return }
+        if entries[idx].runningSince != nil { foldRunning(at: now, idx: idx) }
+        entries.remove(at: idx)
+    }
+
+    // MARK: - Ordering & search
+
+    /// Entries ordered most-recently-active first (running task pinned to top).
+    public var recent: [TimeEntry] {
+        entries.sorted { a, b in
+            let aRunning = a.runningSince != nil
+            let bRunning = b.runningSince != nil
+            if aRunning != bRunning { return aRunning } // running first
+            if a.lastActivityAt != b.lastActivityAt { return a.lastActivityAt > b.lastActivityAt }
+            return a.id.uuidString > b.id.uuidString // stable tiebreak
+        }
+    }
+
+    /// Case-insensitive substring search over titles.
+    public func search(_ query: String, now: Date? = nil) -> [TimeEntry] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return recent }
+        let lowered = q.lowercased()
+        return recent.filter { $0.title.lowercased().contains(lowered) }
+    }
+
+    // MARK: - Persistence snapshot
+
+    /// A snapshot of the model that can be encoded to disk.
+    public struct Snapshot: Codable {
+        public var entries: [TimeEntry]
+    }
+
+    public func snapshot() -> Snapshot { Snapshot(entries: entries) }
+
+    public func restore(_ snap: Snapshot) {
+        self.entries = snap.entries
+    }
+
+    // MARK: - Private
+
+    private func index(of id: UUID) -> Int? {
+        entries.firstIndex { $0.id == id }
+    }
+
+    /// Fold a running interval into `accumulated` and mark it stopped.
+    private func foldRunning(at now: Date, idx: Int) {
+        guard let since = entries[idx].runningSince else { return }
+        let delta = max(0, now.timeIntervalSince(since))
+        entries[idx].accumulated += delta
+        entries[idx].runningSince = nil
+        entries[idx].lastActivityAt = now
+    }
+}
