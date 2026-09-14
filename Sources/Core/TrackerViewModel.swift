@@ -32,6 +32,8 @@ public final class TrackerViewModel: ObservableObject {
     public var runningID: UUID? { engine.runningID }
     public var runningEntry: TimeEntry? { engine.runningEntry }
     public var recent: [TimeEntry] { engine.recent }
+    /// All entries, in the engine's natural (insertion) order.
+    public var entries: [TimeEntry] { engine.entries }
 
     /// The list to display: search results if searching, else the recent list.
     public var visible: [TimeEntry] {

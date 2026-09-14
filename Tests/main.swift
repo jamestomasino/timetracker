@@ -180,6 +180,47 @@ check(engine2.entries.count == 1, "snapshot restores one entry")
 check(engine2.entry(id: p)!.runningSince != nil, "running state survives round-trip")
 approx(engine2.elapsed(for: engine2.entry(id: p)!, at: clock.now()), 42, "live elapsed survives round-trip")
 
+// MARK: - CSV export
+section("csv export")
+let csvNow = Date(timeIntervalSince1970: 1_000_000)
+let csvStopped = TimeEntry(
+    id: UUID(),
+    title: "Design",
+    accumulated: 120,
+    runningSince: nil,
+    createdAt: Date(timeIntervalSince1970: 999_000),
+    lastActivityAt: Date(timeIntervalSince1970: 999_120)
+)
+let csvRunning = TimeEntry(
+    id: UUID(),
+    title: "Build",
+    accumulated: 0,
+    runningSince: Date(timeIntervalSince1970: 999_900),
+    createdAt: Date(timeIntervalSince1970: 999_900),
+    lastActivityAt: Date(timeIntervalSince1970: 999_900)
+)
+let csvOut = CSVExporter.entriesToCSV([csvStopped, csvRunning], now: csvNow)
+let csvLines = csvOut.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+
+check(csvLines.first == CSVExporter.header, "header is first line")
+check(csvLines.count == 3, "one row per entry (got \(csvLines.count))")
+
+let stoppedRow = csvLines[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+check(stoppedRow.last == "Stopped", "stopped status")
+check(stoppedRow[3] == "120", "stopped duration = accumulated (got \(stoppedRow[3]))")
+
+let runningRow = csvLines[2].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+check(runningRow.last == "Running", "running status")
+check(runningRow[3] == "100", "running duration = now - runningSince (got \(runningRow[3]))")
+
+let tricky = TimeEntry(id: UUID(), title: "A, \"quoted\"\nline", accumulated: 5,
+                       runningSince: nil, createdAt: csvNow, lastActivityAt: csvNow)
+check(CSVExporter.entriesToCSV([tricky], now: csvNow).contains("\"A, \"\"quoted\"\"\nline\""),
+      "comma/quote/newline title is RFC-4180 escaped")
+
+check(CSVExporter.entriesToCSV([], now: csvNow) == CSVExporter.header + "\n",
+      "empty list is header only")
+
 // MARK: - Summary
 print("\n──────────────────────────────")
 print("\(passed) passed, \(failed) failed")

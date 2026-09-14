@@ -1,9 +1,13 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 /// The main window content: live header ticker, add row, search, and task list.
 struct ContentView: View {
     @StateObject private var vm = TrackerViewModel()
     @State private var newTaskTitle: String = ""
+    @State private var showExportAlert = false
+    @State private var exportAlertMessage = "Export failed."
 
     private var isSearching: Bool {
         !vm.searchText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -22,6 +26,11 @@ struct ContentView: View {
         .padding(14)
         .frame(minWidth: 320, idealWidth: 360, maxWidth: 480,
                minHeight: 380, idealHeight: 520)
+        .alert("Export failed", isPresented: $showExportAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(exportAlertMessage)
+        }
     }
 
     // MARK: - Header (live ticker)
@@ -83,6 +92,30 @@ struct ContentView: View {
         newTaskTitle = ""
     }
 
+    /// Export all tracked tasks to a CSV file chosen by the user.
+    private func exportCSV() {
+        let entries = vm.entries
+        guard !entries.isEmpty else { return }
+
+        let panel = NSOpenPanel()
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.nameFieldStringValue = "time-tracker.csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.prompt = "Export"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let csv = CSVExporter.entriesToCSV(entries, now: Date())
+            try Data(csv.utf8).write(to: url, options: .atomic)
+        } catch {
+            exportAlertMessage = error.localizedDescription
+            showExportAlert = true
+        }
+    }
+
     // MARK: - Search row
 
     private var searchRow: some View {
@@ -101,6 +134,10 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .help("Clear search")
             }
+            Spacer()
+            Button("Export") { exportCSV() }
+                .help("Export all tasks to CSV")
+                .disabled(vm.entries.isEmpty)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
