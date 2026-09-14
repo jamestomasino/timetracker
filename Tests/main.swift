@@ -633,13 +633,18 @@ check(field(mwLines[2], 0) == "Span" && field(mwLines[2], 1) == mw2 && field(mwL
 // different week. Find a day whose weekKey differs between Monday and Sunday
 // starts, to prove the setting is actually threaded through.
 var found = false
+var foundSat = false
 for offset in 0..<14 {
     let a = d1.addingTimeInterval(TimeInterval(offset * 86400))
     let wkMon = TimeBuckets.weekKey(for: a, calendar: expCal, weekStart: .monday)
     let wkSun = TimeBuckets.weekKey(for: a, calendar: expCal, weekStart: .sunday)
-    if wkMon != wkSun { found = true; break }
+    let wkSat = TimeBuckets.weekKey(for: a, calendar: expCal, weekStart: .saturday)
+    if wkMon != wkSun { found = true }
+    if wkMon != wkSat { foundSat = true }
+    if found && foundSat { break }
 }
 check(found, "some day lands in a different week under Monday vs Sunday start")
+check(foundSat, "some day lands in a different week under Monday vs Saturday start")
 
 // --- date-range filtering: a window excludes entries whose activity is outside it.
 let window = TimeBuckets.window(for: .last30Days, now: expNow, calendar: expCal, weekStart: .monday)!
