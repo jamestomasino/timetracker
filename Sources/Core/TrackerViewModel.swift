@@ -36,6 +36,9 @@ public final class TrackerViewModel: ObservableObject {
     public var runningID: UUID? { engine.runningID }
     public var runningEntry: TimeEntry? { engine.runningEntry }
     public var recent: [TimeEntry] { engine.recent }
+    /// The most recently active task (running pinned to top). Used by the menu
+    /// bar to offer a quick start when nothing is running.
+    public var mostRecent: TimeEntry? { recent.first }
     /// All entries, in the engine's natural (insertion) order.
     public var entries: [TimeEntry] { engine.entries }
 
@@ -63,6 +66,12 @@ public final class TrackerViewModel: ObservableObject {
 
     public func toggle(_ entry: TimeEntry) {
         engine.toggle(id: entry.id)
+        afterMutation()
+    }
+
+    /// Start a task (auto-stops whatever is running).
+    public func start(_ entry: TimeEntry) {
+        engine.start(id: entry.id)
         afterMutation()
     }
 

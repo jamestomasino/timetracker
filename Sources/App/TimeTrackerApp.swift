@@ -58,16 +58,35 @@ struct MenuBarContent: View {
                         .monospacedDigit()
                 }
                 Button {
-                    vm.toggle(running)
+                    vm.stop(running)
                 } label: {
                     Label("Stop", systemImage: "stop.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+            } else if let recent = vm.mostRecent {
+                HStack(spacing: 8) {
+                    Text(recent.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(TimeFormat.string(vm.elapsed(for: recent)))
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                Button {
+                    vm.start(recent)
+                } label: {
+                    Label("Start", systemImage: "play.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
             } else {
-                Label("Nothing is running", systemImage: "clock")
+                Label("No tasks yet", systemImage: "clock")
                     .font(.headline)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
 
             Divider()
