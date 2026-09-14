@@ -20,7 +20,11 @@ stay at the top, and you can search the full list.
 - **Search**: a search box filters the full list by (case-insensitive) title
   substring.
 - **Persistence**: tasks and their times are saved to disk and restored on launch
-  (running tasks keep ticking across relaunches).
+  (running tasks keep ticking across relaunches). Saves are debounced and
+  durable: the previous file is kept as a `.bak` backup before each overwrite,
+  and a corrupt primary file falls back to that backup instead of wiping history.
+- **Safe delete**: deleting a task asks for confirmation first, since it also
+  erases that task's tracked time.
 - **Export to CSV**: the **Export** button writes all tracked tasks to a CSV file
   you choose (RFC-4180 escaped, so titles with commas, quotes, or new lines are safe).
 
@@ -83,7 +87,8 @@ Tests/
 
 `~/Library/Application Support/TimeTracker/entries.json`
 
-Delete that file to reset all tasks.
+A previous copy is kept alongside it as `entries.json.bak` (the last known-good
+state before the most recent save). Delete both files to reset all tasks.
 
 ## CSV export format
 

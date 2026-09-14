@@ -31,6 +31,20 @@ struct ContentView: View {
         } message: {
             Text(exportAlertMessage)
         }
+        .alert(
+            "Delete task?",
+            isPresented: Binding(
+                get: { vm.pendingDelete != nil },
+                set: { if !$0 { vm.pendingDelete = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) { vm.pendingDelete = nil }
+            Button("Delete", role: .destructive) { vm.confirmDelete() }
+        } message: {
+            if let entry = vm.pendingDelete {
+                Text("\"\(entry.title)\" and its tracked time will be permanently deleted.")
+            }
+        }
     }
 
     // MARK: - Header (live ticker)

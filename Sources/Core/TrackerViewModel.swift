@@ -15,6 +15,10 @@ public final class TrackerViewModel: ObservableObject {
     @Published public var searchText: String = ""
     /// Bumped every tick so the elapsed-time views re-render.
     @Published public private(set) var tick: Int = 0
+    /// Set when the user taps delete; the view shows a confirmation and, on
+    /// confirm, calls `confirmDelete()`. Deleting also erases the task's tracked
+    /// time, so we never do it in one irreversible tap.
+    @Published public var pendingDelete: TimeEntry?
     private var ticker: AnyCancellable?
     private var terminateObserver: NSObjectProtocol?
 
@@ -68,7 +72,18 @@ public final class TrackerViewModel: ObservableObject {
     }
 
     public func delete(_ entry: TimeEntry) {
+        pendingDelete = entry
+    }
+
+    /// Actually delete the task the user confirmed. Idempotent if the entry is
+    /// already gone (e.g. a stale pending value from a prior render).
+    public func confirmDelete() {
+        guard let entry = pendingDelete, engine.entry(id: entry.id) != nil else {
+            pendingDelete = nil
+            return
+        }
         engine.delete(id: entry.id)
+        pendingDelete = nil
         afterMutation()
     }
 
