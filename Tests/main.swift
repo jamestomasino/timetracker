@@ -88,6 +88,32 @@ engine.start(id: r); clock.advance(30); engine.stop(id: r)
 engine.start(id: r); clock.advance(20); engine.stop(id: r)
 approx(engine.entry(id: r)!.accumulated, 50, "restart accumulates across runs")
 
+// MARK: - Day attribution on stop
+section("day attribution on stop")
+// The stop path (foldRunning) is the runtime recorder of `dayTotals`. Verify a
+// start->stop folds the interval into `dayTotals` for the day it occurred in,
+// so by-day/by-week exports have data without relying on the legacy fallback.
+reset()
+let attr = engine.add(title: "Attributed").id
+engine.start(id: attr)
+let stopAt = clock.now().addingTimeInterval(60)
+engine.stop(id: attr, now: stopAt)
+let daEntry = engine.entry(id: attr)!
+approx(daEntry.accumulated, 60, "stop folds the interval into accumulated")
+check(daEntry.dayTotals.count == 1, "a same-day stop yields exactly one day bucket")
+let expectedDay = TimeBuckets.dayKey(for: stopAt, calendar: Calendar.current)
+check(daEntry.dayTotals[expectedDay] == 60,
+      "the completed interval is attributed to the stop day")
+approx(daEntry.dayBreakdown(at: stopAt, calendar: Calendar.current).values.reduce(0, +), 60,
+       "dayBreakdown reflects the recorded total")
+
+// A second run the same day adds to the same bucket rather than a new one.
+engine.start(id: attr, now: stopAt)
+engine.stop(id: attr, now: stopAt.addingTimeInterval(30))
+approx(engine.entry(id: attr)!.accumulated, 90, "second same-day run adds to accumulated")
+approx(engine.entry(id: attr)!.dayTotals[expectedDay] ?? -1, 90,
+       "second same-day run merges into the same day bucket")
+
 // MARK: - Auto-stop (only one running at a time)
 section("auto-stop")
 reset()
