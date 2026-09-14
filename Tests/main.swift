@@ -616,6 +616,68 @@ let past = TimeWindow(from: d1.addingTimeInterval(-100 * 86400),
 let outRange = CSVExporter.totalsToCSV([taskA, taskB], now: expNow, calendar: expCal, window: past)
 check(lines(outRange).count == 1, "a window that excludes both tasks -> header only")
 
+// MARK: - End-to-end: engine stop path -> CSV export
+section("end-to-end engine -> CSV")
+// The stop path (foldRunning) and the CSV exporter have each been tested in
+// isolation. This test exercises them together on data that flowed through the
+// real engine: a task that runs across midnight, then all three export shapes
+// are run on engine.entries (not synthetic entries) and the CSV is checked.
+var e2eCal = Calendar(identifier: .gregorian)
+e2eCal.timeZone = TimeZone(identifier: "UTC")!
+// 2026-03-16 is a Monday. Start 22:00, run 3h -> crosses midnight.
+//   Day 2026-03-16: 22:00->24:00 = 7200s
+//   Day 2026-03-17: 00:00->01:00 = 3600s
+//   Total:          10800s
+let e2eStart = DateComponents(calendar: e2eCal, year: 2026, month: 3, day: 16, hour: 22, minute: 0, second: 0).date!
+let e2eStop = e2eStart.addingTimeInterval(3 * 3600)
+let e2eEngine = TimeTrackerEngine(clock: ManualClock(instant: e2eStart), calendar: e2eCal)
+let e2eID = e2eEngine.add(title: "Cross", start: true, now: e2eStart).id
+e2eEngine.stop(id: e2eID, now: e2eStop)
+let e2eEntries = e2eEngine.entries
+check(e2eEntries.count == 1, "e2e: one entry in the engine")
+approx(e2eEntries.first!.accumulated, 10800, "e2e: engine recorded 10800s")
+check(e2eEntries.first!.dayTotals.count == 2, "e2e: engine attributed to two days")
+
+let e2eDay1 = TimeBuckets.dayKey(for: e2eStart, calendar: e2eCal)
+let e2eDay2 = TimeBuckets.dayKey(for: e2eStop, calendar: e2eCal)
+check(e2eDay1 != e2eDay2, "e2e: start and stop fall on different days")
+
+// --- totals: one row, 10800s.
+let e2eTotals = CSVExporter.totalsToCSV(e2eEntries, now: e2eStop, calendar: e2eCal)
+let e2eTLines = lines(e2eTotals)
+check(e2eTLines.count == 2, "e2e totals: header + one row")
+check(field(e2eTLines[1], 0) == "Cross" && field(e2eTLines[1], 3) == "10800",
+      "e2e totals: Cross = 10800")
+check(field(e2eTLines[1], 4) == "Stopped", "e2e totals: Cross is stopped")
+
+// --- by day: two rows (7200 on day1, 3600 on day2).
+let e2eDays = CSVExporter.daysToCSV(e2eEntries, now: e2eStop, calendar: e2eCal)
+let e2eDLines = lines(e2eDays)
+check(e2eDLines.count == 3, "e2e days: header + two rows")
+check(field(e2eDLines[1], 0) == "Cross" && field(e2eDLines[1], 1) == e2eDay1 && field(e2eDLines[1], 2) == "7200",
+      "e2e days: Cross = 7200 on day 1")
+check(field(e2eDLines[2], 0) == "Cross" && field(e2eDLines[2], 1) == e2eDay2 && field(e2eDLines[2], 2) == "3600",
+      "e2e days: Cross = 3600 on day 2")
+
+// --- by week: both days are in the same Monday-start week -> one row, 10800s.
+let e2eWeeks = CSVExporter.weeksToCSV(e2eEntries, now: e2eStop, calendar: e2eCal, weekStart: .monday)
+let e2eWLines = lines(e2eWeeks)
+let e2eWkKey = TimeBuckets.weekKey(for: e2eStart, calendar: e2eCal, weekStart: .monday)
+check(e2eWLines.count == 2, "e2e weeks: header + one row")
+check(field(e2eWLines[1], 0) == "Cross" && field(e2eWLines[1], 1) == e2eWkKey && field(e2eWLines[1], 2) == "10800",
+      "e2e weeks: Cross = 10800 in its week")
+
+// --- date-range filter: a window that contains both days keeps all rows.
+let e2eWindow = TimeBuckets.window(for: .last30Days, now: e2eStop, calendar: e2eCal, weekStart: .monday)!
+let e2eFiltered = CSVExporter.daysToCSV(e2eEntries, now: e2eStop, calendar: e2eCal, window: e2eWindow)
+check(lines(e2eFiltered).count == 3, "e2e days: a window containing both days keeps both rows")
+
+// A window that excludes both days yields header only.
+let e2ePast = TimeWindow(from: e2eStart.addingTimeInterval(-100 * 86400),
+                         to: e2eStart.addingTimeInterval(-90 * 86400))
+let e2eExcluded = CSVExporter.daysToCSV(e2eEntries, now: e2eStop, calendar: e2eCal, window: e2ePast)
+check(lines(e2eExcluded).count == 1, "e2e days: a window excluding both days -> header only")
+
 // MARK: - Toasts (ViewModel)
 section("toasts")
 // TrackerViewModel is @MainActor; this harness runs on the main thread, so we
