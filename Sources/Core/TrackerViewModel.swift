@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import AppKit
 
 /// Bridges the pure engine to SwiftUI.
 ///
@@ -15,6 +16,7 @@ public final class TrackerViewModel: ObservableObject {
     /// Bumped every tick so the elapsed-time views re-render.
     @Published public private(set) var tick: Int = 0
     private var ticker: AnyCancellable?
+    private var terminateObserver: NSObjectProtocol?
 
     public init() {
         let engine = TimeTrackerEngine()
@@ -22,6 +24,7 @@ public final class TrackerViewModel: ObservableObject {
         self.store = EntryStore(engine: engine)
         store.load()
         startTicking()
+        registerTerminateHook()
     }
 
     // MARK: - Derived state
@@ -86,7 +89,23 @@ public final class TrackerViewModel: ObservableObject {
         store.scheduleSave()
     }
 
+    /// Flush pending state synchronously when the app is about to quit, so we
+    /// never lose tracked time to the save debounce window. `deinit` remains a
+    /// fallback, but `willTerminate` is the reliable hook.
+    private func registerTerminateHook() {
+        terminateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.store.saveNow()
+        }
+    }
+
     deinit {
+        if let observer = terminateObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
         ticker?.cancel()
         store.saveNow()
     }
