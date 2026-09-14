@@ -12,8 +12,6 @@ struct ContentView: View {
     @State private var newTaskTitle: String = ""
     @State private var showExportAlert = false
     @State private var exportAlertMessage = "Export failed."
-    @State private var toastMessage = ""
-    @State private var showToast = false
 
     private var isSearching: Bool {
         !vm.searchText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -33,8 +31,8 @@ struct ContentView: View {
         .frame(minWidth: 320, idealWidth: 360, maxWidth: 480,
                minHeight: 380, idealHeight: 520)
         .overlay(alignment: .bottom) {
-            if showToast {
-                Text(toastMessage)
+            if vm.showToast {
+                Text(vm.toastMessage)
                     .font(.callout)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
@@ -44,7 +42,7 @@ struct ContentView: View {
                     .padding(.bottom, 12)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: showToast)
+        .animation(.easeInOut(duration: 0.2), value: vm.showToast)
         .alert("Export failed", isPresented: $showExportAlert) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -141,11 +139,7 @@ struct ContentView: View {
         do {
             let csv = CSVExporter.entriesToCSV(entries, now: Date())
             try Data(csv.utf8).write(to: url, options: .atomic)
-            toastMessage = "Exported \(entries.count) task\(entries.count == 1 ? "" : "s") to \(url.lastPathComponent)"
-            showToast = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                withAnimation { showToast = false }
-            }
+            vm.showToast("Exported \(entries.count) task\(entries.count == 1 ? "" : "s") to \(url.lastPathComponent)")
         } catch {
             exportAlertMessage = error.localizedDescription
             showExportAlert = true

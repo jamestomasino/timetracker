@@ -29,6 +29,9 @@ stay at the top, and you can search the full list by title, notes, or tag.
   corrupt-file recovery.
 - **CSV export**: export all tasks (title, dates, duration, status, notes, tags) to
   a spreadsheet, with a success toast confirming the result.
+- **Toasts as needed**: transient, non-blocking feedback exactly where the UI alone
+  doesn't tell the story — deleting a task and finishing a CSV export. Add/start/stop
+  and notes-save are intentionally silent because their result is already visible.
 - **Safe delete**: deleting a task asks for confirmation first, since it also
   erases that task's tracked time.
 - **Testable core**: the engine is deterministic (injectable clock) and covered by a
@@ -110,6 +113,10 @@ Tests/
 - **Menu bar lives in the App layer.** The `MenuBarExtra` shares the same
   `TrackerViewModel` as the window, so starting/stopping from the popover and the
   window stay in sync.
+- **Toasts are a ViewModel concern, not a view concern.** `showToast(_:)` lives on
+  `TrackerViewModel` (Core layer) so it's testable and shared by the window and the
+  menu bar. It's used sparingly — only for actions whose result isn't already
+  visible (delete, export) — and auto-dismisses after a fixed delay.
 
 ## Data location
 

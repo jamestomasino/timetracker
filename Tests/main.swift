@@ -334,6 +334,45 @@ check(taggedLines.count == 2, "one row for tagged entry")
 check(taggedLines[1].contains("\"needs, a comma\""), "notes with comma are quoted")
 check(taggedLines[1].contains("work; urgent"), "tags joined with '; '")
 
+// MARK: - Toasts (ViewModel)
+section("toasts")
+// TrackerViewModel is @MainActor; this harness runs on the main thread, so we
+// hop onto the main actor for the duration of these checks.
+MainActor.assumeIsolated {
+    // Point the store at a throwaway file so the test never reads or writes the
+    // user's real Application Support data.
+    let toastDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("timetracker-toast-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: toastDir, withIntermediateDirectories: true)
+    let toastEngine = TimeTrackerEngine(clock: clock)
+    let vm = TrackerViewModel(
+        engine: toastEngine,
+        store: EntryStore(engine: toastEngine, fileURL: toastDir.appendingPathComponent("entries.json"))
+    )
+    check(vm.showToast == false, "no toast shown initially")
+    check(vm.toastMessage.isEmpty, "toast message empty initially")
+
+    vm.showToast("hello")
+    check(vm.showToast == true, "showToast turns the toast on")
+    check(vm.toastMessage == "hello", "toast carries the message")
+
+    vm.showToast("second")
+    check(vm.toastMessage == "second", "a second toast replaces the first")
+
+    // confirmDelete fires a "Deleted ..." toast and removes the entry.
+    vm.addTask("Doomed", start: false)
+    let before = vm.entries.count
+    vm.delete(vm.entries.first!)
+    check(vm.pendingDelete != nil, "delete is staged for confirmation")
+    vm.confirmDelete()
+    check(vm.showToast == true, "confirmDelete shows a toast")
+    check(vm.toastMessage == "Deleted \"Doomed\"", "delete toast names the task")
+    check(vm.entries.count == before - 1, "entry is removed on confirm")
+    check(vm.pendingDelete == nil, "pending delete clears after confirm")
+
+    try? FileManager.default.removeItem(at: toastDir)
+}
+
 // MARK: - EntryStore (file persistence)
 section("entry store")
 

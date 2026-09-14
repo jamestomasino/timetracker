@@ -19,6 +19,11 @@ public final class TrackerViewModel: ObservableObject {
     /// confirm, calls `confirmDelete()`. Deleting also erases the task's tracked
     /// time, so we never do it in one irreversible tap.
     @Published public var pendingDelete: TimeEntry?
+    /// Transient, non-blocking feedback ("as needed" toasts). Views render this
+    /// when `showToast` is true; it auto-dismisses after `toastDuration`.
+    @Published public private(set) var toastMessage: String = ""
+    @Published public private(set) var showToast: Bool = false
+    private var toastDismissal: Task<Void, Never>?
     private var ticker: AnyCancellable?
     private var terminateObserver: NSObjectProtocol?
 
@@ -26,6 +31,16 @@ public final class TrackerViewModel: ObservableObject {
         let engine = TimeTrackerEngine()
         self.engine = engine
         self.store = EntryStore(engine: engine)
+        store.load()
+        startTicking()
+        registerTerminateHook()
+    }
+
+    /// Injectable initializer (used by tests to avoid touching the real
+    /// Application Support file).
+    public init(engine: TimeTrackerEngine, store: EntryStore) {
+        self.engine = engine
+        self.store = store
         store.load()
         startTicking()
         registerTerminateHook()
@@ -97,9 +112,30 @@ public final class TrackerViewModel: ObservableObject {
             pendingDelete = nil
             return
         }
+        let title = entry.title
         engine.delete(id: entry.id)
         pendingDelete = nil
         afterMutation()
+        // Destructive and irreversible — confirm it landed.
+        showToast("Deleted \"\(title)\"")
+    }
+
+    // MARK: - Toasts
+
+    /// How long a toast stays on screen before auto-dismissing.
+    public static let toastDuration: TimeInterval = 2.5
+
+    /// Show a transient toast. A pending dismissal is cancelled first, so rapid
+    /// toasts don't stack or dismiss each other early.
+    public func showToast(_ message: String) {
+        toastDismissal?.cancel()
+        toastMessage = message
+        showToast = true
+        toastDismissal = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.toastDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.showToast = false
+        }
     }
 
     // MARK: - Ticking
