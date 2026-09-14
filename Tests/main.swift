@@ -612,6 +612,23 @@ check(field(wLines[1], 0) == "Alpha" && field(wLines[1], 1) == wkKey && field(wL
 check(field(wLines[2], 0) == "Beta" && field(wLines[2], 1) == wkKey && field(wLines[2], 2) == "90",
       "weeks row: Beta = 90 in its week")
 
+// --- by week, multiple weeks: a task with time in two different weeks must
+// produce one row per week (groupWeeks splits by week anchor). 2026-03-16 is
+// a Monday (week 1); 2026-03-23 is the following Monday (week 2).
+let multiWeek = TimeEntry(id: UUID(), title: "Span",
+    accumulated: 10800, runningSince: nil,
+    createdAt: d1, lastActivityAt: d1,
+    dayTotals: ["2026-03-16": 3600, "2026-03-23": 7200])
+let mwLines = lines(CSVExporter.weeksToCSV([multiWeek], now: expNow, calendar: expCal, weekStart: .monday))
+let mw1 = TimeBuckets.weekKey(for: DateComponents(calendar: expCal, year: 2026, month: 3, day: 16).date!, calendar: expCal, weekStart: .monday)
+let mw2 = TimeBuckets.weekKey(for: DateComponents(calendar: expCal, year: 2026, month: 3, day: 23).date!, calendar: expCal, weekStart: .monday)
+check(mw1 != mw2, "multi-week: the two days land in different weeks")
+check(mwLines.count == 3, "multi-week: header + one row per week (got \(mwLines.count))")
+check(field(mwLines[1], 0) == "Span" && field(mwLines[1], 1) == mw1 && field(mwLines[1], 2) == "3600",
+      "multi-week: Span = 3600 in week 1")
+check(field(mwLines[2], 0) == "Span" && field(mwLines[2], 1) == mw2 && field(mwLines[2], 2) == "7200",
+      "multi-week: Span = 7200 in week 2")
+
 // --- weekStart is honored: switching the week anchor can move a day into a
 // different week. Find a day whose weekKey differs between Monday and Sunday
 // starts, to prove the setting is actually threaded through.
