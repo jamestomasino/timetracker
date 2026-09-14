@@ -18,6 +18,7 @@ RES_DIR="${APP_DIR}/Contents/Resources"
 
 CORE_SRC=(
   Sources/Core/TimeEntry.swift
+  Sources/Core/TimeBuckets.swift
   Sources/Core/CSVExporter.swift
   Sources/Core/TimeTrackerEngine.swift
   Sources/Core/EntryStore.swift

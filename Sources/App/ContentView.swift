@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var newTaskTitle: String = ""
     @State private var showExportAlert = false
     @State private var exportAlertMessage = "Export failed."
+    @State private var exportRange: DateRange = .all
 
     private var isSearching: Bool {
         !vm.searchText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -123,29 +124,6 @@ struct ContentView: View {
         newTaskTitle = ""
     }
 
-    /// Export all tracked tasks to a CSV file chosen by the user.
-    private func exportCSV() {
-        let entries = vm.entries
-        guard !entries.isEmpty else { return }
-
-        let panel = NSSavePanel()
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "time-tracker.csv"
-        panel.allowedContentTypes = [.commaSeparatedText]
-        panel.prompt = "Export"
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        do {
-            let csv = CSVExporter.entriesToCSV(entries, now: Date())
-            try Data(csv.utf8).write(to: url, options: .atomic)
-            vm.showToast("Exported \(entries.count) task\(entries.count == 1 ? "" : "s") to \(url.lastPathComponent)")
-        } catch {
-            exportAlertMessage = error.localizedDescription
-            showExportAlert = true
-        }
-    }
-
     // MARK: - Search row
 
     private var searchRow: some View {
@@ -165,8 +143,7 @@ struct ContentView: View {
                 .help("Clear search")
             }
             Spacer()
-            Button("Export") { exportCSV() }
-                .help("Export all tasks to CSV")
+            exportMenu
                 .disabled(vm.entries.isEmpty)
         }
         .padding(.horizontal, 8)
@@ -175,6 +152,67 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
+    }
+
+    // MARK: - Export
+
+    /// The export control: pick a shape (totals / by day / by week) and a
+    /// date range, then save to a file of the user's choice.
+    private var exportMenu: some View {
+        Menu {
+            Picker("Range", selection: $exportRange) {
+                ForEach(DateRange.allCases, id: \.self) { range in
+                    Text(range.label).tag(range)
+                }
+            }
+            Divider()
+            Button("Export task totals") { export(.totals) }
+            Button("Export tasks by day") { export(.byDay) }
+            Button("Export tasks by week") { export(.byWeek) }
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.body)
+        }
+        .help("Export tracked time")
+    }
+
+    /// Resolve the chosen range to a window and run the export for `mode`.
+    private func export(_ mode: ExportMode) {
+        let entries = vm.entries
+        guard !entries.isEmpty else { return }
+
+        let now = Date()
+        let window = TimeBuckets.window(for: exportRange, now: now, weekStart: vm.settings.weekStart)
+
+        let csv: String
+        let suggestedName: String
+        switch mode {
+        case .totals:
+            csv = CSVExporter.totalsToCSV(entries, now: now, window: window)
+            suggestedName = "time-tracker-totals.csv"
+        case .byDay:
+            csv = CSVExporter.daysToCSV(entries, now: now, window: window)
+            suggestedName = "time-tracker-by-day.csv"
+        case .byWeek:
+            csv = CSVExporter.weeksToCSV(entries, now: now, weekStart: vm.settings.weekStart, window: window)
+            suggestedName = "time-tracker-by-week.csv"
+        }
+
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = suggestedName
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.prompt = "Export"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try Data(csv.utf8).write(to: url, options: .atomic)
+            vm.showToast("Exported \(mode.label) to \(url.lastPathComponent)")
+        } catch {
+            exportAlertMessage = error.localizedDescription
+            showExportAlert = true
+        }
     }
 
     // MARK: - Task list

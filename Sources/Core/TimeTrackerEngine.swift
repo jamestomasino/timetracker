@@ -157,11 +157,18 @@ public final class TimeTrackerEngine {
         entries.firstIndex { $0.id == id }
     }
 
-    /// Fold a running interval into `accumulated` and mark it stopped.
+    /// Fold a running interval into `accumulated`, attribute it to the day(s)
+    /// it spanned, and mark it stopped.
     private func foldRunning(at now: Date, idx: Int) {
         guard let since = entries[idx].runningSince else { return }
         let delta = max(0, now.timeIntervalSince(since))
         entries[idx].accumulated += delta
+        // Attribute the completed interval to the day(s) it covered so the
+        // by-day and by-week exports are correct.
+        let perDay = TimeBuckets.splitByDay(start: since, end: now)
+        for (key, secs) in perDay {
+            entries[idx].dayTotals[key, default: 0] += secs
+        }
         entries[idx].runningSince = nil
         entries[idx].lastActivityAt = now
     }

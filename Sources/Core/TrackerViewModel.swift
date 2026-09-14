@@ -46,9 +46,13 @@ public final class TrackerViewModel: ObservableObject {
         self.engine = engine
         // Default the store to one bound to the same engine, so the common
         // `TrackerViewModel()` call works without wiring the store by hand.
-        self.store = store ?? EntryStore(engine: engine)
+        let resolvedStore = store ?? EntryStore(engine: engine)
+        self.store = resolvedStore
         self.settingsStore = settingsStore
         self.clock = clock
+        // Restore the persisted snapshot so tracked time survives relaunch.
+        // Must happen before we seed `entries` from the engine.
+        resolvedStore.load()
         self.entries = engine.entries
         self.settings = settingsStore.load()
         // Forward the toast's changes into our own objectWillChange so views
@@ -148,6 +152,13 @@ public final class TrackerViewModel: ObservableObject {
     public func setToastEnabled(_ enabled: Bool) {
         guard settings.toastEnabled != enabled else { return }
         settings.toastEnabled = enabled
+        settingsStore.save(settings)
+    }
+
+    /// Set the week-start day (used by the "tasks by week" export).
+    public func setWeekStart(_ weekStart: WeekStart) {
+        guard settings.weekStart != weekStart else { return }
+        settings.weekStart = weekStart
         settingsStore.save(settings)
     }
 

@@ -188,6 +188,112 @@ check(engine2.entries.count == 1, "snapshot restores one entry")
 check(engine2.entry(id: p)!.runningSince != nil, "running state survives round-trip")
 approx(engine2.elapsed(for: engine2.entry(id: p)!, at: clock.now()), 42, "live elapsed survives round-trip")
 
+// MARK: - TimeBuckets (day / week / window)
+section("time buckets")
+// A fixed UTC calendar so the day/week math is deterministic regardless of the
+// machine's time zone.
+let utc = Calendar(identifier: .gregorian)
+var dayCal = Calendar(identifier: .gregorian)
+dayCal.timeZone = TimeZone(identifier: "UTC")!
+let weekCal = dayCal
+
+// 2026-03-15 is a Sunday (UTC).
+let march15 = Date(timeIntervalSince1970: 1_773_552_000)
+let march16 = march15.addingTimeInterval(86400)
+let march17 = march15.addingTimeInterval(172800)
+
+// dayKey: same day -> same key; next day -> different key.
+check(TimeBuckets.dayKey(for: march15, calendar: dayCal)
+      == TimeBuckets.dayKey(for: march15.addingTimeInterval(43200), calendar: dayCal),
+      "two instants on the same day share a key")
+check(TimeBuckets.dayKey(for: march15, calendar: dayCal)
+      != TimeBuckets.dayKey(for: march16, calendar: dayCal),
+      "the next day is a different key")
+
+// splitByDay: an interval that does not cross a boundary is one bucket.
+let single = TimeBuckets.splitByDay(
+    start: march15.addingTimeInterval(3600),
+    end: march15.addingTimeInterval(7200),
+    calendar: dayCal)
+check(single.count == 1, "same-day interval -> one bucket")
+approx(single.values.first ?? -1, 3600, "same-day interval keeps its duration")
+
+// splitByDay: an interval crossing a midnight is split 50/50. Anchor on the
+// calendar's own midnights so the halves are exactly 12h each regardless of the
+// instant's time of day.
+let mid1 = dayCal.startOfDay(for: march15)
+let mid2 = dayCal.startOfDay(for: march16)
+let splitCrossed = TimeBuckets.splitByDay(
+    start: mid1.addingTimeInterval(43200),   // 12:00 on the 15th
+    end: mid2.addingTimeInterval(43200),     // 12:00 on the 16th
+    calendar: dayCal)
+check(splitCrossed.count == 2, "cross-midnight interval -> two buckets")
+approx(splitCrossed[TimeBuckets.dayKey(for: mid1, calendar: dayCal)] ?? -1, 43200,
+       "first day gets the first half")
+approx(splitCrossed[TimeBuckets.dayKey(for: mid2, calendar: dayCal)] ?? -1, 43200,
+       "second day gets the second half")
+
+// splitByDay: a degenerate (zero-length) interval is empty, not a crash.
+check(TimeBuckets.splitByDay(start: march15, end: march15, calendar: dayCal).isEmpty,
+      "zero-length interval -> no buckets")
+
+// weekKey: a week of 7 consecutive days is one key; the day after is another.
+// Anchor on a Monday so the 7 days (Mon..Sun) sit inside a single Monday-start week.
+let weekAnchor = dayCal.startOfDay(for: march16)   // 2026-03-16 is a Monday
+let wk1 = TimeBuckets.weekKey(for: weekAnchor, calendar: weekCal, weekStart: .monday)
+let wk7 = TimeBuckets.weekKey(for: weekAnchor.addingTimeInterval(6 * 86400), calendar: weekCal, weekStart: .monday)
+let wk8 = TimeBuckets.weekKey(for: weekAnchor.addingTimeInterval(7 * 86400), calendar: weekCal, weekStart: .monday)
+check(wk1 == wk7, "7 consecutive days share a week key")
+check(wk1 != wk8, "the day after the week is a different key")
+
+// window(for:): "all" is nil.
+check(TimeBuckets.window(for: .all, now: march15, calendar: dayCal, weekStart: .monday) == nil,
+      "range .all -> no window")
+
+// window(for:): "this week" contains the current day, is 7 days wide, and is
+// anchored at local midnight. Use a Monday as "now" so a later day of the same
+// week (Tuesday) is also inside.
+if let tw = TimeBuckets.window(for: .thisWeek, now: march16, calendar: dayCal, weekStart: .monday) {
+    check(tw.contains(march16), "this-week window contains the current day")
+    approx(tw.to.timeIntervalSince(tw.from), 7 * 86400, "this-week window is 7 days wide")
+    check(dayCal.component(.hour, from: tw.from) == 0, "window starts at local midnight")
+    check(tw.contains(march17), "this-week window contains a later day of the same week")
+} else {
+    check(false, "this-week window should not be nil")
+}
+
+// window(for:): "this month" contains the 1st of the month.
+if let tm = TimeBuckets.window(for: .thisMonth, now: march15, calendar: dayCal, weekStart: .monday) {
+    let first = dayCal.date(from: dayCal.dateComponents([.year, .month], from: march15))!
+    check(tm.contains(first), "this-month window contains the 1st")
+    check(tm.contains(march15), "this-month window contains the current day")
+} else {
+    check(false, "this-month window should not be nil")
+}
+
+// window(for:): "last 30 days" is exactly 30 days wide and contains today.
+if let l30 = TimeBuckets.window(for: .last30Days, now: march15, calendar: dayCal, weekStart: .monday) {
+    approx(l30.to.timeIntervalSince(l30.from), 30 * 86400, "last-30-days window is 30 days wide")
+    check(l30.contains(march15), "last-30-days window contains today")
+    check(!l30.contains(march15.addingTimeInterval(-31 * 86400)),
+          "a day 31 days ago is outside last-30-days")
+} else {
+    check(false, "last-30-days window should not be nil")
+}
+
+// inWindow: entries inside the window pass; outside are excluded.
+let inside = TimeEntry(id: UUID(), title: "in", accumulated: 10, runningSince: nil,
+                       createdAt: march15, lastActivityAt: march15)
+let outside = TimeEntry(id: UUID(), title: "out", accumulated: 10, runningSince: nil,
+                        createdAt: march15.addingTimeInterval(-40 * 86400),
+                        lastActivityAt: march15.addingTimeInterval(-40 * 86400))
+if let w = TimeBuckets.window(for: .last30Days, now: march15, calendar: dayCal, weekStart: .monday) {
+    check(inside.inWindow(w), "entry inside the window passes the filter")
+    check(!outside.inWindow(w), "entry outside the window is filtered out")
+} else {
+    check(false, "window should not be nil for inWindow check")
+}
+
 // MARK: - CSV export
 section("csv export")
 let csvNow = Date(timeIntervalSince1970: 1_000_000)
@@ -210,7 +316,7 @@ let csvRunning = TimeEntry(
 let csvOut = CSVExporter.entriesToCSV([csvStopped, csvRunning], now: csvNow)
 let csvLines = csvOut.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
 
-check(csvLines.first == CSVExporter.header, "header is first line")
+check(csvLines.first == CSVExporter.totalsHeader, "header is first line")
 check(csvLines.count == 3, "one row per entry (got \(csvLines.count))")
 
 let stoppedRow = csvLines[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
@@ -228,7 +334,7 @@ let tricky = TimeEntry(id: UUID(), title: "A, \"quoted\"\nline", accumulated: 5,
 check(CSVExporter.entriesToCSV([tricky], now: csvNow).contains("\"A, \"\"quoted\"\"\nline\""),
       "comma/quote/newline title is RFC-4180 escaped")
 
-check(CSVExporter.entriesToCSV([], now: csvNow) == CSVExporter.header + "\n",
+check(CSVExporter.entriesToCSV([], now: csvNow) == CSVExporter.totalsHeader + "\n",
       "empty list is header only")
 
 // The real write step exportCSV() performs after the panel returns a URL:
@@ -338,6 +444,124 @@ check(taggedLines.count == 2, "one row for tagged entry")
 check(taggedLines[1].contains("\"needs, a comma\""), "notes with comma are quoted")
 check(taggedLines[1].contains("work; urgent"), "tags joined with '; '")
 
+// MARK: - dayBreakdown (per-day attribution)
+section("day breakdown")
+// A fixed UTC calendar so day math is deterministic.
+var dbCal = Calendar(identifier: .gregorian)
+dbCal.timeZone = TimeZone(identifier: "UTC")!
+// d1 is a Monday and d2 the following Tuesday, so the two days fall in the
+// same week under a Monday-start setting (a Sunday d1 would straddle two weeks).
+let d1 = Date(timeIntervalSince1970: 1_773_619_200)      // 2026-03-16 (Mon)
+let d2 = d1.addingTimeInterval(86400)                    // 2026-03-17 (Tue)
+let k1 = TimeBuckets.dayKey(for: d1, calendar: dbCal)
+let k2 = TimeBuckets.dayKey(for: d2, calendar: dbCal)
+
+// A stopped entry with recorded dayTotals: breakdown == those totals.
+let recorded = TimeEntry(id: UUID(), title: "Recorded",
+    accumulated: 200, runningSince: nil, createdAt: d1, lastActivityAt: d2,
+    dayTotals: [k1: 120, k2: 80])
+let recBD = recorded.dayBreakdown(at: d2, calendar: dbCal)
+check(recBD[k1] == 120, "recorded day total is preserved")
+check(recBD[k2] == 80, "second day total is preserved")
+approx(recBD.values.reduce(0, +), 200, "recorded breakdown sums to accumulated")
+
+// A legacy stopped entry (no dayTotals, accumulated > 0): all time is attributed
+// to the lastActivityAt day.
+let legacy = TimeEntry(id: UUID(), title: "Legacy",
+    accumulated: 90, runningSince: nil, createdAt: d1, lastActivityAt: d2)
+let legBD = legacy.dayBreakdown(at: d2, calendar: dbCal)
+check(legBD[k2] == 90, "legacy stopped time is attributed to the last-activity day")
+check(legBD[k1] == nil, "legacy time is not split across other days")
+
+// A legacy RUNNING entry: accumulated is attributed to the last-activity day AND
+// the live interval is split by day, so the running split appears alongside.
+let runningLegacy = TimeEntry(id: UUID(), title: "RunningLegacy",
+    accumulated: 30, runningSince: d2.addingTimeInterval(3600),
+    createdAt: d1, lastActivityAt: d2)
+let runBD = runningLegacy.dayBreakdown(at: d2.addingTimeInterval(7200), calendar: dbCal)
+check(runBD[k2] == 30 + 3600, "running legacy: accumulated + live split share the day")
+approx(runBD.values.reduce(0, +), 30 + 3600, "running legacy breakdown sums to total")
+
+// A zero-time entry (never ran, no recorded totals) has an empty breakdown.
+let zero = TimeEntry(id: UUID(), title: "Zero",
+    accumulated: 0, runningSince: nil, createdAt: d1, lastActivityAt: d1)
+check(zero.dayBreakdown(at: d1, calendar: dbCal).isEmpty, "zero-time entry has empty breakdown")
+
+// MARK: - Export shapes (totals / by-day / by-week)
+section("export shapes")
+let expCal = dbCal
+let expNow = d2.addingTimeInterval(1000)
+let taskA = TimeEntry(id: UUID(), title: "Alpha",
+    accumulated: 200, runningSince: nil, createdAt: d1, lastActivityAt: d2,
+    dayTotals: [k1: 120, k2: 80])
+let taskB = TimeEntry(id: UUID(), title: "Beta",
+    accumulated: 90, runningSince: nil, createdAt: d1, lastActivityAt: d2)
+
+func lines(_ s: String) -> [String] {
+    s.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+}
+func field(_ line: String, _ i: Int) -> String {
+    line.split(separator: ",", omittingEmptySubsequences: false).map(String.init)[i]
+}
+
+// --- totals: one row per task, total time.
+let totals = CSVExporter.totalsToCSV([taskA, taskB], now: expNow, calendar: expCal)
+let tLines = lines(totals)
+check(tLines.first == CSVExporter.totalsHeader, "totals header is first")
+check(tLines.count == 3, "totals: one row per task (got \(tLines.count))")
+check(field(tLines[1], 0) == "Alpha" && field(tLines[1], 3) == "200",
+      "totals row: Alpha = 200")
+check(field(tLines[1], 4) == "Stopped", "totals row: Alpha is stopped")
+check(field(tLines[2], 0) == "Beta" && field(tLines[2], 3) == "90",
+      "totals row: Beta = 90")
+
+// --- by day: one row per (task, day), sorted by day then task.
+let days = CSVExporter.daysToCSV([taskA, taskB], now: expNow, calendar: expCal)
+let dLines = lines(days)
+check(dLines.first == CSVExporter.byDayHeader, "days header is first")
+check(dLines.count == 4, "days: one row per (task, day) (got \(dLines.count))")
+check(field(dLines[1], 0) == "Alpha" && field(dLines[1], 1) == k1 && field(dLines[1], 2) == "120",
+      "days row: Alpha on day 1")
+check(field(dLines[2], 0) == "Alpha" && field(dLines[2], 1) == k2 && field(dLines[2], 2) == "80",
+      "days row: Alpha on day 2")
+check(field(dLines[3], 0) == "Beta" && field(dLines[3], 1) == k2 && field(dLines[3], 2) == "90",
+      "days row: Beta on day 2")
+
+// --- by week: one row per (task, week). Both days are in the same ISO week
+// (2026-03-15 is a Sunday; with Monday-start, d1 and d2 fall in the same week).
+let weeks = CSVExporter.weeksToCSV([taskA, taskB], now: expNow, calendar: expCal, weekStart: .monday)
+let wLines = lines(weeks)
+check(wLines.first == CSVExporter.byWeekHeader, "weeks header is first")
+let wkKey = TimeBuckets.weekKey(for: d1, calendar: expCal, weekStart: .monday)
+check(wLines.count == 3, "weeks: one row per (task, week) (got \(wLines.count))")
+check(field(wLines[1], 0) == "Alpha" && field(wLines[1], 1) == wkKey && field(wLines[1], 2) == "200",
+      "weeks row: Alpha = 200 in its week")
+check(field(wLines[2], 0) == "Beta" && field(wLines[2], 1) == wkKey && field(wLines[2], 2) == "90",
+      "weeks row: Beta = 90 in its week")
+
+// --- weekStart is honored: switching the week anchor can move a day into a
+// different week. Find a day whose weekKey differs between Monday and Sunday
+// starts, to prove the setting is actually threaded through.
+var found = false
+for offset in 0..<14 {
+    let a = d1.addingTimeInterval(TimeInterval(offset * 86400))
+    let wkMon = TimeBuckets.weekKey(for: a, calendar: expCal, weekStart: .monday)
+    let wkSun = TimeBuckets.weekKey(for: a, calendar: expCal, weekStart: .sunday)
+    if wkMon != wkSun { found = true; break }
+}
+check(found, "some day lands in a different week under Monday vs Sunday start")
+
+// --- date-range filtering: a window excludes entries whose activity is outside it.
+let window = TimeBuckets.window(for: .last30Days, now: expNow, calendar: expCal, weekStart: .monday)!
+let inRange = CSVExporter.totalsToCSV([taskA, taskB], now: expNow, calendar: expCal, window: window)
+check(lines(inRange).count == 3, "a window that contains both tasks keeps both rows")
+
+// A window that excludes both tasks (anchored far in the past) yields header only.
+let past = TimeWindow(from: d1.addingTimeInterval(-100 * 86400),
+                      to: d1.addingTimeInterval(-90 * 86400))
+let outRange = CSVExporter.totalsToCSV([taskA, taskB], now: expNow, calendar: expCal, window: past)
+check(lines(outRange).count == 1, "a window that excludes both tasks -> header only")
+
 // MARK: - Toasts (ViewModel)
 section("toasts")
 // TrackerViewModel is @MainActor; this harness runs on the main thread, so we
@@ -441,6 +665,37 @@ do {
 
 // Clean up the temp store dir.
 try? FileManager.default.removeItem(at: storeDir)
+
+// MARK: - ViewModel restores persisted state on init
+// Regression: the app used to start with an empty engine even when a saved
+// snapshot was on disk, because `TrackerViewModel.init` never called
+// `store.load()`. Tracked time must survive a relaunch.
+section("view model restores persisted entries")
+MainActor.assumeIsolated {
+    let vmDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("timetracker-vm-restore-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: vmDir, withIntermediateDirectories: true)
+    let vmFile = vmDir.appendingPathComponent("entries.json")
+
+    // Simulate a prior session: write a snapshot to disk.
+    let prior = TimeTrackerEngine(clock: clock)
+    let priorId = prior.add(title: "Carried over").id
+    prior.start(id: priorId); clock.advance(77); prior.stop(id: priorId)
+    EntryStore(engine: prior, fileURL: vmFile).saveNow()
+
+    // A fresh view model (new engine, same file) must restore that state.
+    let freshEngine = TimeTrackerEngine(clock: clock)
+    let vm = TrackerViewModel(
+        engine: freshEngine,
+        store: EntryStore(engine: freshEngine, fileURL: vmFile),
+        settingsStore: SettingsStore.inMemory()
+    )
+    check(vm.entries.count == 1, "vm restores one entry from disk on init")
+    check(vm.entries.first?.title == "Carried over", "restored entry is the saved one")
+    approx(vm.entries.first!.accumulated, 77, "restored accumulated time is intact")
+
+    try? FileManager.default.removeItem(at: vmDir)
+}
 
 // MARK: - AppSettings (model + decode)
 section("app settings")

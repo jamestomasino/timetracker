@@ -14,10 +14,17 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var toastEnabled: Bool
     /// While a task is running, post a notification at the top of each hour.
     public var hourlyReminderEnabled: Bool
+    /// The day a week begins, used by the "tasks by week" export.
+    public var weekStart: WeekStart
 
-    public init(toastEnabled: Bool = true, hourlyReminderEnabled: Bool = false) {
+    public init(
+        toastEnabled: Bool = true,
+        hourlyReminderEnabled: Bool = false,
+        weekStart: WeekStart = .monday
+    ) {
         self.toastEnabled = toastEnabled
         self.hourlyReminderEnabled = hourlyReminderEnabled
+        self.weekStart = weekStart
     }
 
     public init(from decoder: Decoder) throws {
@@ -25,5 +32,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.toastEnabled = try c.decodeIfPresent(Bool.self, forKey: .toastEnabled) ?? true
         self.hourlyReminderEnabled =
             try c.decodeIfPresent(Bool.self, forKey: .hourlyReminderEnabled) ?? false
+        self.weekStart =
+            try c.decodeIfPresent(WeekStart.self, forKey: .weekStart) ?? .monday
     }
 }

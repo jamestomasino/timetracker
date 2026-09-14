@@ -24,6 +24,11 @@ public struct TimeEntry: Identifiable, Codable, Hashable, Sendable {
     public var notes: String
     /// Normalized tags (trimmed, lowercased, de-duplicated, in first-seen order).
     public var tags: [String]
+    /// Completed (stopped) time in seconds, attributed to the day it was
+    /// recorded, keyed by local `yyyy-MM-dd`. This is what makes per-day and
+    /// per-week exports possible; the running interval is attributed when it is
+    /// folded into `accumulated`.
+    public var dayTotals: [String: TimeInterval]
 
     public init(
         id: UUID = UUID(),
@@ -33,7 +38,8 @@ public struct TimeEntry: Identifiable, Codable, Hashable, Sendable {
         createdAt: Date = Date(),
         lastActivityAt: Date = Date(),
         notes: String = "",
-        tags: [String] = []
+        tags: [String] = [],
+        dayTotals: [String: TimeInterval] = [:]
     ) {
         self.id = id
         self.title = title
@@ -43,10 +49,11 @@ public struct TimeEntry: Identifiable, Codable, Hashable, Sendable {
         self.lastActivityAt = lastActivityAt
         self.notes = notes
         self.tags = tags
+        self.dayTotals = dayTotals
     }
 
-    /// Lenient decode: `notes` and `tags` default to empty when absent, so a
-    /// snapshot saved before those fields existed still loads.
+    /// Lenient decode: `notes`, `tags`, and `dayTotals` default to empty when
+    /// absent, so a snapshot saved before those fields existed still loads.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
@@ -57,6 +64,8 @@ public struct TimeEntry: Identifiable, Codable, Hashable, Sendable {
         self.lastActivityAt = try c.decode(Date.self, forKey: .lastActivityAt)
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         self.tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
+        self.dayTotals =
+            try c.decodeIfPresent([String: TimeInterval].self, forKey: .dayTotals) ?? [:]
     }
 
     /// Total tracked seconds for this entry at `now`: completed time plus the
@@ -66,6 +75,48 @@ public struct TimeEntry: Identifiable, Codable, Hashable, Sendable {
     public func duration(at now: Date) -> TimeInterval {
         let running = runningSince.map { now.timeIntervalSince($0) } ?? 0
         return max(0, accumulated + running)
+    }
+
+    /// Per-day tracked seconds at `now`: the stored `dayTotals` plus the live
+    /// running interval, split across the day(s) it spans and added to today.
+    /// This is the single source of truth for the "by day" and "by week"
+    /// exports, so a running task contributes to the day it is running in.
+    ///
+    /// Legacy entries (saved before per-day attribution existed) have
+    /// `accumulated > 0` but empty `dayTotals`; we attribute all of that
+    /// accumulated time to the day of `lastActivityAt`, which is the best
+    /// available approximation.
+    public func dayBreakdown(at now: Date, calendar: Calendar = Calendar.current) -> [String: TimeInterval] {
+        var result = dayTotals
+        // Live running interval: split across the day(s) it spans.
+        if let since = runningSince, now > since {
+            let live = TimeBuckets.splitByDay(start: since, end: now, calendar: calendar)
+            for (key, secs) in live {
+                result[key, default: 0] += secs
+            }
+        }
+        // Legacy fallback: if the entry has accumulated time but no per-day
+        // breakdown (saved before attribution existed), attribute it to the
+        // last activity day. Keyed off `dayTotals` (not `result`) so a running
+        // legacy entry still gets its accumulated time attributed.
+        if dayTotals.isEmpty, accumulated > 0 {
+            let key = TimeBuckets.dayKey(for: lastActivityAt, calendar: calendar)
+            result[key, default: 0] += accumulated
+        }
+        return result
+    }
+
+    /// True when any of this entry's tracked time falls inside `window`.
+    /// Used by the export date-range filter to decide whether the entry
+    /// contributes to the export at all.
+    public func inWindow(
+        _ window: TimeWindow,
+        at now: Date = Date(),
+        calendar: Calendar = Calendar.current
+    ) -> Bool {
+        dayBreakdown(at: now, calendar: calendar).keys.contains { key in
+            TimeBuckets.dayInWindow(key, window, calendar: calendar)
+        }
     }
 }
 

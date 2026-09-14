@@ -4,9 +4,8 @@ import SwiftUI
 import TimeTrackerCore
 #endif
 
-/// The Settings window. Currently a single "Notifications" section; the
-/// structure is a list of sections so future settings can be added without
-/// reshaping the window.
+/// The Settings window. A list of sections (Notifications, Export) so future
+/// settings can be added without reshaping the window.
 struct SettingsView: View {
     @ObservedObject var vm: TrackerViewModel
 
@@ -37,6 +36,30 @@ struct SettingsView: View {
                         set: { vm.setHourlyReminderEnabled($0) }
                     ))
                     .labelsHidden()
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+
+            Divider()
+
+            // Section: Export
+            sectionHeader("Export")
+            VStack(alignment: .leading, spacing: 0) {
+                row(
+                    title: "Week starts on",
+                    subtitle: "Used by the “tasks by week” export to group days into weeks."
+                ) {
+                    Picker("", selection: Binding(
+                        get: { vm.settings.weekStart },
+                        set: { vm.setWeekStart($0) }
+                    )) {
+                        ForEach(WeekStart.allCases, id: \.self) { ws in
+                            Text(ws.label).tag(ws)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 120)
                 }
             }
             .padding(.horizontal, 16)
