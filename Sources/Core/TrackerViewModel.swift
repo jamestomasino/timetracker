@@ -102,12 +102,25 @@ public final class TrackerViewModel: ObservableObject {
         }
     }
 
-    /// Called when the user enables the hourly reminder: ask for permission.
+    /// Turn the hourly break reminder on. Requests notification authorization
+    /// (the reminder is the only thing that posts system notifications).
     public func enableHourlyReminder() {
-        guard settings.hourlyReminderEnabled == false else { return }
-        settings.hourlyReminderEnabled = true
+        setHourlyReminderEnabled(true)
+    }
+
+    /// Toggle the hourly break reminder in either direction.
+    ///
+    /// Turning it on requests notification authorization; turning it off
+    /// disarms the reminder so it does not fire on the next tick.
+    public func setHourlyReminderEnabled(_ enabled: Bool) {
+        guard settings.hourlyReminderEnabled != enabled else { return }
+        settings.hourlyReminderEnabled = enabled
+        if enabled {
+            requestAuthorization?()
+        } else {
+            reminderLastBucket = nil
+        }
         settingsStore.save(settings)
-        requestAuthorization?()
     }
 
     // MARK: - Settings
@@ -116,14 +129,6 @@ public final class TrackerViewModel: ObservableObject {
     public func setToastEnabled(_ enabled: Bool) {
         guard settings.toastEnabled != enabled else { return }
         settings.toastEnabled = enabled
-        settingsStore.save(settings)
-    }
-
-    /// Toggle the hourly break reminder setting (no authorization side effect).
-    public func setHourlyReminderEnabled(_ enabled: Bool) {
-        guard settings.hourlyReminderEnabled != enabled else { return }
-        settings.hourlyReminderEnabled = enabled
-        if !enabled { reminderLastBucket = nil }
         settingsStore.save(settings)
     }
 

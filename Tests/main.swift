@@ -579,6 +579,13 @@ MainActor.assumeIsolated {
     check(vm.settings.hourlyReminderEnabled == true, "enableHourlyReminder turns it on")
     check(authRequested == true, "enabling requests notification authorization")
 
+    // The toggle must work in BOTH directions: turning it off flips the
+    // setting (a common bug is a toggle that only ever calls "enable").
+    vm.setHourlyReminderEnabled(false)
+    check(vm.settings.hourlyReminderEnabled == false, "setHourlyReminderEnabled(false) turns it off")
+    vm.setHourlyReminderEnabled(true)
+    check(vm.settings.hourlyReminderEnabled == true, "re-enabling turns it back on")
+
     // Reminder does not fire when nothing is running.
     posted = []
     vm.tick()

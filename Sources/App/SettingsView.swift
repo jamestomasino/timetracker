@@ -34,7 +34,7 @@ struct SettingsView: View {
                 ) {
                     Toggle("", isOn: Binding(
                         get: { vm.settings.hourlyReminderEnabled },
-                        set: { _ in vm.enableHourlyReminder() }
+                        set: { vm.setHourlyReminderEnabled($0) }
                     ))
                     .labelsHidden()
                 }
