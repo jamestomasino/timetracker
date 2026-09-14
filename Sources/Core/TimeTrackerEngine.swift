@@ -40,8 +40,7 @@ public final class TimeTrackerEngine {
 
     /// Live elapsed seconds for a task, given an instant.
     public func elapsed(for entry: TimeEntry, at now: Date) -> TimeInterval {
-        let running = entry.runningSince.map { now.timeIntervalSince($0) } ?? 0
-        return max(0, entry.accumulated + running)
+        entry.duration(at: now)
     }
 
     // MARK: - Mutations

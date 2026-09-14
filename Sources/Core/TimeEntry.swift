@@ -58,6 +58,15 @@ public struct TimeEntry: Identifiable, Codable, Hashable, Sendable {
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         self.tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
     }
+
+    /// Total tracked seconds for this entry at `now`: completed time plus the
+    /// live running interval (if any), clamped at zero. Single source of truth
+    /// for "how long has this task been tracked," shared by the engine's
+    /// live-elapsed reporting and the CSV export.
+    public func duration(at now: Date) -> TimeInterval {
+        let running = runningSince.map { now.timeIntervalSince($0) } ?? 0
+        return max(0, accumulated + running)
+    }
 }
 
 /// Parse a raw tag string into normalized tags.
@@ -87,11 +96,4 @@ public protocol Clock: Sendable {
 public struct SystemClock: Clock {
     public init() {}
     public func now() -> Date { Date() }
-}
-
-/// A clock pinned to a fixed instant, for tests.
-public struct FixedClock: Clock {
-    public var instant: Date
-    public init(instant: Date) { self.instant = instant }
-    public func now() -> Date { instant }
 }

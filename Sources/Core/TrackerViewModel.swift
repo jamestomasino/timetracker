@@ -1,10 +1,6 @@
 import Foundation
 import Combine
 
-#if canImport(TimeTrackerCore)
-import TimeTrackerCore
-#endif
-
 /// Bridges the pure `TimeTrackerEngine` to SwiftUI.
 ///
 /// Exposes the engine's state as `@Published` properties and runs a 1-second
@@ -21,8 +17,6 @@ import TimeTrackerCore
 public final class TrackerViewModel: ObservableObject {
     @Published public var entries: [TimeEntry]
     @Published public var searchText: String = ""
-    @Published public var toastMessage: String = ""
-    @Published public var showToast: Bool = false
     @Published public var pendingDelete: TimeEntry?
     /// User preferences (toast on/off, hourly reminder on/off), persisted.
     @Published public var settings: AppSettings
@@ -31,10 +25,11 @@ public final class TrackerViewModel: ObservableObject {
     private let store: EntryStore
     private let settingsStore: SettingsStore
     private let clock: Clock
+    private let toast = ToastCenter()
     private var timer: Timer?
-    private var toastResetTask: Task<Void, Never>?
     /// Last hour bucket checked for the break reminder (`nil` = not armed).
     private var reminderLastBucket: Date?
+    private var toastCancellables = Set<AnyCancellable>()
 
     /// Injected by the app layer: posts the break-reminder notification.
     /// Defaults to a no-op so the type works in the headless test harness.
@@ -56,6 +51,13 @@ public final class TrackerViewModel: ObservableObject {
         self.clock = clock
         self.entries = engine.entries
         self.settings = settingsStore.load()
+        // Forward the toast's changes into our own objectWillChange so views
+        // observing the view model update when a toast shows or hides.
+        toast.objectWillChange
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.objectWillChange.send() }
+            }
+            .store(in: &toastCancellables)
         // The ticker is what keeps the live elapsed-time labels updating and
         // what drives the break reminder, so it must run from launch.
         startTicker()
@@ -212,16 +214,21 @@ public final class TrackerViewModel: ObservableObject {
 
     // MARK: - Toast
 
+    /// Whether a toast is currently visible (state lives in `ToastCenter`).
+    public var showToast: Bool {
+        get { toast.visible }
+        set { toast.visible = newValue }
+    }
+
+    /// The message in the current toast (empty when none).
+    public var toastMessage: String {
+        get { toast.message }
+        set { toast.message = newValue }
+    }
+
     /// Show a transient toast, gated by the toast-enabled setting.
     public func showToast(_ message: String) {
         guard settings.toastEnabled else { return }
-        toastMessage = message
-        showToast = true
-        toastResetTask?.cancel()
-        toastResetTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_500_000_000) // 2.5s
-            guard !Task.isCancelled else { return }
-            self?.showToast = false
-        }
+        toast.show(message)
     }
 }

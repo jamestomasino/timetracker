@@ -32,11 +32,15 @@ private func approx(_ a: Double, _ b: Double, _ label: String, _ tol: Double = 0
 }
 
 // A clock we can advance by hand so assertions are exact (no sleeps).
-final class ManualClock: Clock {
-    var instant: Date
+// Thread-safe (lock-guarded) so it satisfies `Clock: Sendable` even in the
+// Swift 6 language mode, where a mutable stored property in a Sendable class
+// is an error.
+final class ManualClock: Clock, @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant: Date
     init(instant: Date) { self.instant = instant }
-    func now() -> Date { instant }
-    func advance(_ s: TimeInterval) { instant = instant.addingTimeInterval(s) }
+    func now() -> Date { lock.withLock { self.instant } }
+    func advance(_ s: TimeInterval) { lock.withLock { self.instant = self.instant.addingTimeInterval(s) } }
 }
 
 let t0 = Date(timeIntervalSince1970: 0)

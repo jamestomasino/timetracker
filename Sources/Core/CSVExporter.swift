@@ -29,11 +29,9 @@ public enum CSVExporter {
     }
 
     /// Same duration definition as the engine: completed time plus the live
-    /// running interval, clamped at zero.
+    /// running interval, clamped at zero (now shared via `TimeEntry.duration`).
     private static func durationString(_ entry: TimeEntry, at now: Date) -> String {
-        let running = entry.runningSince.map { now.timeIntervalSince($0) } ?? 0
-        let total = max(0, entry.accumulated + running)
-        return String(format: "%.0f", total)
+        String(format: "%.0f", entry.duration(at: now))
     }
 
     /// RFC-4180 field escaping: wrap in quotes and double any embedded quotes.
