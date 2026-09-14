@@ -236,6 +236,70 @@ do {
     check(false, "export write/read round-trip threw: \(error)")
 }
 
+// MARK: - EntryStore (file persistence)
+section("entry store")
+
+// A unique temp dir so parallel runs never collide.
+let storeDir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("timetracker-store-\(UUID().uuidString)")
+try? FileManager.default.createDirectory(at: storeDir, withIntermediateDirectories: true)
+let storeFile = storeDir.appendingPathComponent("entries.json")
+let storeBackup = storeFile.appendingPathExtension("bak")
+
+func freshEngine() -> TimeTrackerEngine { TimeTrackerEngine(clock: clock) }
+
+do {
+    // 1. Load with no file present: engine stays empty, no crash.
+    let emptyEngine = freshEngine()
+    let emptyStore = EntryStore(engine: emptyEngine, fileURL: storeFile)
+    emptyStore.load()
+    check(emptyEngine.entries.isEmpty, "load with no file leaves engine empty")
+
+    // 2. Save then load into a fresh engine: entries survive the round-trip.
+    let src = freshEngine()
+    let savedId = src.add(title: "Design").id
+    src.start(id: savedId); clock.advance(42)
+    src.stop(id: savedId)
+    let s1 = EntryStore(engine: src, fileURL: storeFile)
+    s1.saveNow()
+    check(FileManager.default.fileExists(atPath: storeFile.path), "saveNow writes the primary file")
+
+    let dst = freshEngine()
+    let s2 = EntryStore(engine: dst, fileURL: storeFile)
+    s2.load()
+    check(dst.entries.count == 1, "load restores one entry")
+    approx(dst.entry(id: savedId)!.accumulated, 42, "accumulated survives save/load")
+
+    // 3. A second save rotates the previous primary into a .bak backup.
+    let src2 = freshEngine()
+    src2.add(title: "Meeting")
+    let s3 = EntryStore(engine: src2, fileURL: storeFile)
+    s3.saveNow()
+    check(FileManager.default.fileExists(atPath: storeBackup.path), "second save creates a .bak backup")
+
+    // 4. Corrupt the primary: load must fall back to the backup, not wipe.
+    try "not json at all".write(to: storeFile, atomically: true, encoding: .utf8)
+    let recovered = freshEngine()
+    let s4 = EntryStore(engine: recovered, fileURL: storeFile)
+    s4.load()
+    check(recovered.entries.count == 1, "corrupt primary falls back to backup")
+    check(recovered.entries.first?.title == "Design", "recovered entry is the last-known-good one")
+
+    // 5. A save that yields valid data overwrites a corrupt primary (recovers).
+    let src3 = freshEngine()
+    src3.add(title: "Recover")
+    let s5 = EntryStore(engine: src3, fileURL: storeFile)
+    s5.saveNow()
+    let afterRecover = freshEngine()
+    EntryStore(engine: afterRecover, fileURL: storeFile).load()
+    check(afterRecover.entries.first?.title == "Recover", "a good save overwrites a corrupt primary")
+} catch {
+    check(false, "entry store tests threw: \(error)")
+}
+
+// Clean up the temp store dir.
+try? FileManager.default.removeItem(at: storeDir)
+
 // MARK: - Summary
 print("\n──────────────────────────────")
 print("\(passed) passed, \(failed) failed")
