@@ -554,6 +554,17 @@ MainActor.assumeIsolated {
     vm.postReminder = { posted.append($0) }
     vm.requestAuthorization = { authRequested = true }
 
+    // Regression: the ticker must auto-start in init. It is what keeps the
+    // live elapsed-time labels updating AND what drives the break reminder,
+    // so if it ever stops auto-starting the reminder silently never fires in
+    // production (the tests below call tick() directly and would not notice).
+    check(vm.isTickerRunning, "ticker auto-starts in init")
+    vm.stopTicker()
+    check(!vm.isTickerRunning, "stopTicker stops the ticker")
+    vm.startTicker()
+    check(vm.isTickerRunning, "startTicker restarts the ticker")
+    // Leave it running for the reminder checks that follow.
+
     // Defaults loaded from the (empty) in-memory store.
     check(vm.settings.toastEnabled == true, "vm loads toast-enabled default")
     check(vm.settings.hourlyReminderEnabled == false, "vm loads reminder-off default")
@@ -615,6 +626,17 @@ MainActor.assumeIsolated {
     wiringClock.advance(7200)
     vm.tick()
     check(posted.isEmpty, "reminder suppressed when disabled")
+
+    // flushOnQuit must force a synchronous save so tracked time is never lost
+    // to the debounce window when the app quits. A mutation only schedules a
+    // debounced save (300ms); flushOnQuit writes immediately, so the entry is
+    // on disk right away.
+    vm.addTask("Quit flush", start: false)
+    vm.flushOnQuit()
+    let flushed = TimeTrackerEngine(clock: wiringClock)
+    EntryStore(engine: flushed, fileURL: wiringDir.appendingPathComponent("entries.json")).load()
+    check(flushed.entries.contains { $0.title == "Quit flush" },
+          "flushOnQuit force-saves synchronously (no debounce window)")
 
     try? FileManager.default.removeItem(at: wiringDir)
 }

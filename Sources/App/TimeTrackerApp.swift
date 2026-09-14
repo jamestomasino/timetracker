@@ -11,6 +11,10 @@ struct TimeTrackerApp: App {
     /// agree on state.
     @StateObject private var vm = TrackerViewModel()
 
+    /// Ensures the `willTerminate` flush observer is registered exactly once,
+    /// even though `configureNotifications` runs from several surfaces.
+    private static var terminateObserver: NSObjectProtocol?
+
     var body: some Scene {
         // Give the main window a stable id so the menu bar can open it
         // reliably via the `openWindow` action (see `MenuBarContent`).
@@ -45,12 +49,29 @@ struct TimeTrackerApp: App {
         .menuBarExtraStyle(.window)
     }
 
-    /// Wire the platform notification hooks into the view model. Idempotent,
-    /// so it is safe to call from every surface's `onAppear`.
+    /// Wire the platform hooks into the view model. Idempotent, so it is safe
+    /// to call from every surface's `onAppear`.
     @MainActor
     private func configureNotifications(_ vm: TrackerViewModel) {
         vm.postReminder = { title in AppNotifications.postBreakReminder(taskTitle: title) }
         vm.requestAuthorization = { AppNotifications.requestAuthorization() }
+
+        // Force-flush the store when the app quits so tracked time is never
+        // lost to the save debounce window. Registered once (the static guard
+        // makes repeated `onAppear` calls harmless).
+        if Self.terminateObserver == nil {
+            Self.terminateObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification,
+                object: nil,
+                queue: .main
+            ) { [weak vm] _ in
+                // This is the last chance to flush before the process dies, so
+                // do it synchronously (no async hop that may not run in time).
+                // The observer is queued on .main, so the main-actor call is
+                // safe.
+                MainActor.assumeIsolated { vm?.flushOnQuit() }
+            }
+        }
     }
 
     private var menuBarIconName: String {

@@ -56,6 +56,9 @@ public final class TrackerViewModel: ObservableObject {
         self.clock = clock
         self.entries = engine.entries
         self.settings = settingsStore.load()
+        // The ticker is what keeps the live elapsed-time labels updating and
+        // what drives the break reminder, so it must run from launch.
+        startTicker()
     }
 
     // MARK: - Ticker
@@ -73,6 +76,10 @@ public final class TrackerViewModel: ObservableObject {
         timer?.invalidate()
         timer = nil
     }
+
+    /// Whether the 1-second ticker is currently running. Used by the test
+    /// harness to assert the ticker auto-starts in `init`.
+    public var isTickerRunning: Bool { timer != nil }
 
     /// One tick: refresh published state and fire the break reminder if due.
     /// Exposed so the test harness can drive it deterministically.
@@ -120,6 +127,16 @@ public final class TrackerViewModel: ObservableObject {
         } else {
             reminderLastBucket = nil
         }
+        settingsStore.save(settings)
+    }
+
+    // MARK: - Persistence
+
+    /// Force-flush any pending debounced save synchronously. The app layer
+    /// calls this from its `NSApplication.willTerminate` observer so tracked
+    /// time is never lost to the save debounce window when the app quits.
+    public func flushOnQuit() {
+        store.saveNow()
         settingsStore.save(settings)
     }
 
