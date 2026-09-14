@@ -242,6 +242,25 @@ check(engine2.entries.count == 1, "snapshot restores one entry")
 check(engine2.entry(id: p)!.runningSince != nil, "running state survives round-trip")
 approx(engine2.elapsed(for: engine2.entry(id: p)!, at: clock.now()), 42, "live elapsed survives round-trip")
 
+// A stopped task's dayTotals must survive the round-trip too, otherwise the
+// by-day/by-week export silently loses data after a restart.
+reset()
+let q = engine.add(title: "D").id
+engine.start(id: q); clock.advance(60)
+engine.stop(id: q)
+let qEntry = engine.entry(id: q)!
+check(qEntry.dayTotals.count == 1, "stopped task has one day bucket before round-trip")
+let snap2 = engine.snapshot()
+let data2 = try JSONEncoder().encode(snap2)
+let decoded2 = try JSONDecoder().decode(TimeTrackerEngine.Snapshot.self, from: data2)
+let engine3 = TimeTrackerEngine(clock: clock)
+engine3.restore(decoded2)
+let qEntry2 = engine3.entry(id: q)!
+check(qEntry2.dayTotals.count == qEntry.dayTotals.count, "dayTotals key count survives round-trip")
+for (key, val) in qEntry.dayTotals {
+    check(abs((qEntry2.dayTotals[key] ?? 0) - val) < 0.001, "dayTotals[\(key)] survives round-trip")
+}
+
 // MARK: - TimeBuckets (day / week / window)
 section("time buckets")
 // A fixed UTC calendar so the day/week math is deterministic regardless of the
