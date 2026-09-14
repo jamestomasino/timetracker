@@ -221,6 +221,21 @@ check(CSVExporter.entriesToCSV([tricky], now: csvNow).contains("\"A, \"\"quoted\
 check(CSVExporter.entriesToCSV([], now: csvNow) == CSVExporter.header + "\n",
       "empty list is header only")
 
+// The real write step exportCSV() performs after the panel returns a URL:
+// serialize -> atomic write to a file -> read it back. Confirms the bytes that
+// land on disk are exactly the CSV, not just the in-memory string.
+do {
+    let writeURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("timetracker-csv-roundtrip-\(UUID().uuidString).csv")
+    let writeCSV = CSVExporter.entriesToCSV([csvStopped, csvRunning, tricky], now: csvNow)
+    try Data(writeCSV.utf8).write(to: writeURL, options: .atomic)
+    let roundTrip = try Data(contentsOf: writeURL)
+    try FileManager.default.removeItem(at: writeURL)
+    check(roundTrip == Data(writeCSV.utf8), "exported file is byte-for-byte the CSV (got \(roundTrip.count) bytes)")
+} catch {
+    check(false, "export write/read round-trip threw: \(error)")
+}
+
 // MARK: - Summary
 print("\n──────────────────────────────")
 print("\(passed) passed, \(failed) failed")
