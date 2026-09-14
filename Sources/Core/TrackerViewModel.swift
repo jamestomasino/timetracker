@@ -71,6 +71,12 @@ public final class TrackerViewModel: ObservableObject {
         afterMutation()
     }
 
+    /// Set a task's notes and/or tags from the editor.
+    public func updateNotesTags(_ entry: TimeEntry, notes: String, tags: [String]) {
+        engine.update(id: entry.id, notes: notes, tags: tags)
+        afterMutation()
+    }
+
     public func delete(_ entry: TimeEntry) {
         pendingDelete = entry
     }

@@ -106,6 +106,14 @@ public final class TimeTrackerEngine {
         entries.remove(at: idx)
     }
 
+    /// Update a task's notes and/or tags (no time mutation).
+    public func update(id: UUID, notes: String? = nil, tags: [String]? = nil, now: Date? = nil) {
+        guard let idx = index(of: id) else { return }
+        if let notes { entries[idx].notes = notes }
+        if let tags { entries[idx].tags = tags }
+        entries[idx].lastActivityAt = now ?? clock.now()
+    }
+
     // MARK: - Ordering & search
 
     /// Entries ordered most-recently-active first (running task pinned to top).
@@ -119,12 +127,16 @@ public final class TimeTrackerEngine {
         }
     }
 
-    /// Case-insensitive substring search over titles.
+    /// Case-insensitive substring search over titles, notes, and tags.
     public func search(_ query: String, now: Date? = nil) -> [TimeEntry] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return recent }
         let lowered = q.lowercased()
-        return recent.filter { $0.title.lowercased().contains(lowered) }
+        return recent.filter { entry in
+            entry.title.lowercased().contains(lowered)
+                || entry.notes.lowercased().contains(lowered)
+                || entry.tags.contains { $0.contains(lowered) }
+        }
     }
 
     // MARK: - Persistence snapshot

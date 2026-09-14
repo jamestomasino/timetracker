@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(TimeTrackerCore)
+import TimeTrackerCore
+#endif
+
 // Lightweight assertion harness. Compiles the Core sources + this file into a
 // single executable (no XCTest runner needed), so `swiftc ... && ./tests` works
 // without SwiftPM or Xcode.
@@ -206,11 +210,13 @@ check(csvLines.first == CSVExporter.header, "header is first line")
 check(csvLines.count == 3, "one row per entry (got \(csvLines.count))")
 
 let stoppedRow = csvLines[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-check(stoppedRow.last == "Stopped", "stopped status")
+check(stoppedRow[4] == "Stopped", "stopped status")
 check(stoppedRow[3] == "120", "stopped duration = accumulated (got \(stoppedRow[3]))")
+check(stoppedRow[5] == "", "stopped notes empty by default")
+check(stoppedRow[6] == "", "stopped tags empty by default")
 
 let runningRow = csvLines[2].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-check(runningRow.last == "Running", "running status")
+check(runningRow[4] == "Running", "running status")
 check(runningRow[3] == "100", "running duration = now - runningSince (got \(runningRow[3]))")
 
 let tricky = TimeEntry(id: UUID(), title: "A, \"quoted\"\nline", accumulated: 5,
@@ -235,6 +241,98 @@ do {
 } catch {
     check(false, "export write/read round-trip threw: \(error)")
 }
+
+// MARK: - parseTags
+section("parseTags")
+check(parseTags("") == [], "empty string -> no tags")
+check(parseTags("   ") == [], "whitespace only -> no tags")
+check(parseTags("Work, design") == ["work", "design"], "comma split, lowercased")
+check(parseTags("work, design , design, urgent") == ["work", "design", "urgent"], "dedupes and trims")
+check(parseTags("a;b;c") == ["a", "b", "c"], "semicolon split")
+check(parseTags("  X  ,  x  ") == ["x"], "case-insensitive dedup")
+check(parseTags("solo") == ["solo"], "single tag")
+
+// MARK: - Notes & tags search
+section("notes & tags search")
+reset()
+let n1 = engine.add(title: "Client call").id
+let n2 = engine.add(title: "Internal sync").id
+engine.update(id: n1, notes: "discuss Q3 roadmap", tags: ["client", "sales"])
+engine.update(id: n2, notes: "weekly team check-in", tags: ["team"])
+check(engine.search("roadmap").count == 1, "search matches notes")
+check(engine.search("roadmap").first?.id == n1, "notes match is the right task")
+check(engine.search("client").count == 1, "search matches a tag")
+check(engine.search("sales").count == 1, "search matches another tag")
+check(engine.search("internal").count == 1, "title search still works")
+check(engine.search("zzz").count == 0, "no match still empty")
+
+// MARK: - update()
+section("update notes/tags")
+reset()
+let u = engine.add(title: "Task").id
+check(engine.entry(id: u)!.notes == "", "new entry has empty notes")
+check(engine.entry(id: u)!.tags.isEmpty, "new entry has no tags")
+engine.update(id: u, notes: "hello", tags: ["a", "b"])
+check(engine.entry(id: u)!.notes == "hello", "update sets notes")
+check(engine.entry(id: u)!.tags == ["a", "b"], "update sets tags")
+engine.update(id: u, notes: "changed")
+check(engine.entry(id: u)!.tags == ["a", "b"], "partial update keeps tags")
+// Update on a missing id is a no-op, not a crash.
+engine.update(id: UUID(), notes: "ghost")
+check(engine.entries.count == 1, "update on missing id is a no-op")
+
+// MARK: - Backward-compat decode
+section("backward-compat decode")
+// A snapshot written by an older version (no notes/tags keys) must still load.
+// Dates are numeric (the app's default JSONEncoder date strategy).
+let legacyJSON = """
+{
+  "id": "00000000-0000-0000-0000-000000000001",
+  "title": "Legacy task",
+  "accumulated": 30,
+  "runningSince": null,
+  "createdAt": 1704067200,
+  "lastActivityAt": 1704067230
+}
+"""
+do {
+    let decoded = try JSONDecoder().decode(TimeEntry.self, from: Data(legacyJSON.utf8))
+    check(decoded.title == "Legacy task", "legacy entry decodes title")
+    check(decoded.notes == "", "legacy entry defaults notes to empty")
+    check(decoded.tags.isEmpty, "legacy entry defaults tags to empty")
+} catch {
+    check(false, "legacy decode threw: \(error)")
+}
+
+// A modern entry with notes/tags round-trips through JSON.
+do {
+    let modern = TimeEntry(id: UUID(), title: "Modern", notes: "hi", tags: ["x"])
+    let data = try JSONEncoder().encode(modern)
+    let back = try JSONDecoder().decode(TimeEntry.self, from: data)
+    check(back.notes == "hi", "modern notes round-trip")
+    check(back.tags == ["x"], "modern tags round-trip")
+} catch {
+    check(false, "modern round-trip threw: \(error)")
+}
+
+// MARK: - CSV notes/tags columns
+section("csv notes/tags columns")
+let taggedEntry = TimeEntry(
+    id: UUID(),
+    title: "Tagged",
+    accumulated: 10,
+    runningSince: nil,
+    createdAt: csvNow,
+    lastActivityAt: csvNow,
+    notes: "needs, a comma",
+    tags: ["work", "urgent"]
+)
+let taggedCSV = CSVExporter.entriesToCSV([taggedEntry], now: csvNow)
+let taggedLines = taggedCSV.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+check(taggedLines.count == 2, "one row for tagged entry")
+// Notes contain a comma so the field must be quoted.
+check(taggedLines[1].contains("\"needs, a comma\""), "notes with comma are quoted")
+check(taggedLines[1].contains("work; urgent"), "tags joined with '; '")
 
 // MARK: - EntryStore (file persistence)
 section("entry store")

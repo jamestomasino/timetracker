@@ -2,12 +2,18 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+#if canImport(TimeTrackerCore)
+import TimeTrackerCore
+#endif
+
 /// The main window content: live header ticker, add row, search, and task list.
 struct ContentView: View {
-    @StateObject private var vm = TrackerViewModel()
+    @ObservedObject var vm: TrackerViewModel
     @State private var newTaskTitle: String = ""
     @State private var showExportAlert = false
     @State private var exportAlertMessage = "Export failed."
+    @State private var toastMessage = ""
+    @State private var showToast = false
 
     private var isSearching: Bool {
         !vm.searchText.trimmingCharacters(in: .whitespaces).isEmpty
@@ -26,6 +32,19 @@ struct ContentView: View {
         .padding(14)
         .frame(minWidth: 320, idealWidth: 360, maxWidth: 480,
                minHeight: 380, idealHeight: 520)
+        .overlay(alignment: .bottom) {
+            if showToast {
+                Text(toastMessage)
+                    .font(.callout)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.92)))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(.bottom, 12)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: showToast)
         .alert("Export failed", isPresented: $showExportAlert) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -122,6 +141,11 @@ struct ContentView: View {
         do {
             let csv = CSVExporter.entriesToCSV(entries, now: Date())
             try Data(csv.utf8).write(to: url, options: .atomic)
+            toastMessage = "Exported \(entries.count) task\(entries.count == 1 ? "" : "s") to \(url.lastPathComponent)"
+            showToast = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                withAnimation { showToast = false }
+            }
         } catch {
             exportAlertMessage = error.localizedDescription
             showExportAlert = true

@@ -2,11 +2,11 @@
 
 A small native macOS time tracker. Add a task, start it, and watch the clock tick.
 Starting a new task automatically stops the one that's running. Your recent tasks
-stay at the top, and you can search the full list.
+stay at the top, and you can search the full list by title, notes, or tag.
 
 ![MVP](https://img.shields.io/badge/status-MVP-blue)
 
-## Features (MVP)
+## Features
 
 - **Small window** with standard macOS UI components (SwiftUI).
 - **Add a task** with a title, optionally **Add & Start** it immediately.
@@ -17,22 +17,28 @@ stay at the top, and you can search the full list.
   header and in the row.
 - **Recent list**: the running task is pinned to the top; the rest are ordered by
   most-recently-active.
-- **Search**: a search box filters the full list by (case-insensitive) title
-  substring.
-- **Persistence**: tasks and their times are saved to disk and restored on launch
-  (running tasks keep ticking across relaunches). Saves are debounced and
-  durable: the previous file is kept as a `.bak` backup before each overwrite,
-  and a corrupt primary file falls back to that backup instead of wiping history.
+- **Search**: a search box filters the full list by (case-insensitive) substring of
+  title, notes, or any tag.
+- **Notes & tags**: add free-form notes and comma/semicolon-separated tags to any
+  task via the pencil button. Tags render as `#chips` and are searchable.
+- **Menu bar**: a live popover with the running task's timer, a Stop button, and a
+  shortcut to open the window. The icon shows a filled stop-circle when something is
+  running.
+- **Persistence**: tasks and their times survive app restarts (saved to
+  `~/Library/Application Support/TimeTracker/`), with automatic backup and
+  corrupt-file recovery.
+- **CSV export**: export all tasks (title, dates, duration, status, notes, tags) to
+  a spreadsheet, with a success toast confirming the result.
 - **Safe delete**: deleting a task asks for confirmation first, since it also
   erases that task's tracked time.
-- **Export to CSV**: the **Export** button writes all tracked tasks to a CSV file
-  you choose (RFC-4180 escaped, so titles with commas, quotes, or new lines are safe).
+- **Testable core**: the engine is deterministic (injectable clock) and covered by a
+  lightweight test suite (82 checks).
 
 ## Requirements
 
 - macOS 14+ (Sonoma or later).
 - Swift 6 / the Xcode Command Line Tools. **Full Xcode is not required** — the
-  app is built with `swiftc` directly.
+  app is built with `swiftc` directly (or SwiftPM).
 
 ## Build & run
 
@@ -47,25 +53,41 @@ To build the app **and** run the test suite:
 bash build.sh test
 ```
 
+### SwiftPM (optional)
+
+The project is also a valid SwiftPM package, so you can build and test without
+`build.sh`:
+
+```bash
+swift build                 # builds the TimeTracker executable
+swift run TimeTrackerTests  # runs the same assertion-based test suite
+```
+
+Both paths compile the exact same source files; `Package.swift` is additive and
+does not change the `build.sh` flow.
+
 The test suite (`Tests/main.swift`) is a self-contained assertion harness that
-exercises the core engine (start/stop/auto-stop/toggle/ordering/search/persistence)
-with a manually-advanced clock, so it's fast and deterministic.
+exercises the core engine (start/stop/auto-stop/toggle/ordering/search/notes &
+tags/persistence/CSV) with a manually-advanced clock, so it's fast and
+deterministic.
 
 ## Project layout
 
 ```
 build.sh                      # swiftc-only build + test runner
+Package.swift                 # additive SwiftPM manifest (Core lib + App + Tests)
 Sources/
   Core/
-    TimeEntry.swift           # model + Clock abstraction (SystemClock / FixedClock)
+    TimeEntry.swift           # model + parseTags + Clock abstraction
     TimeTrackerEngine.swift   # pure state machine (no UI, no I/O) — fully testable
     EntryStore.swift          # JSON persistence to Application Support
     TimeFormat.swift          # h:mm:ss / mm:ss formatting
-    TrackerViewModel.swift    # ObservableObject bridge + 1s ticker
+    CSVExporter.swift         # RFC-4180 CSV serialization (notes + tags columns)
+    TrackerViewModel.swift    # ObservableObject bridge + 1s ticker + notes/tags update
   App/
-    TimeTrackerApp.swift      # @main, small window
-    ContentView.swift         # header, add row, search, list
-    TaskRow.swift             # one task row: title, elapsed, play/stop, delete
+    TimeTrackerApp.swift      # @main, small window + MenuBarExtra
+    ContentView.swift         # header, add row, search, list, export toast
+    TaskRow.swift             # one task row: title, tags, notes, play/stop, edit, delete
 Resources/                    # (reserved)
 Tests/
   main.swift                  # assertion harness for the engine
@@ -82,6 +104,12 @@ Tests/
   correct even if the app is backgrounded or relaunched, and there's no drift
   from incrementing a counter.
 - **Persistence is debounced** so the 1-second ticker doesn't hammer the disk.
+- **Backward-compatible model.** `TimeEntry` decodes `notes` and `tags` with
+  `decodeIfPresent`, so `entries.json` files written by older versions (without
+  those keys) still load cleanly, defaulting to empty.
+- **Menu bar lives in the App layer.** The `MenuBarExtra` shares the same
+  `TrackerViewModel` as the window, so starting/stopping from the popover and the
+  window stay in sync.
 
 ## Data location
 
@@ -96,7 +124,7 @@ The **Export** button (in the search row) opens a save panel defaulting to
 `time-tracker.csv` and writes one row per task, in the app's natural order:
 
 ```
-Title,Created At,Last Activity,Duration (s),Status
+Title,Created At,Last Activity,Duration (s),Status,Notes,Tags
 ```
 
 - **Title** — the task title, RFC-4180 quoted if it contains a comma, quote, or newline.
@@ -104,13 +132,8 @@ Title,Created At,Last Activity,Duration (s),Status
 - **Duration (s)** — total tracked seconds. For a running task this is
   `accumulated + (now - runningSince)`; for a stopped task it is the accumulated time.
 - **Status** — `Running` if the task is currently running, otherwise `Stopped`.
+- **Notes** — the task's free-form notes, RFC-4180 quoted if needed.
+- **Tags** — the task's tags joined with `"; "`.
 
 The serialization lives in `Sources/Core/CSVExporter.swift` (pure, AppKit-free) and
-is covered by the test suite's `csv export` section.
-
-## Possible next steps
-
-- Menu-bar / status-item mode.
-- Per-task notes, tags, or projects.
-- A proper `.xcodeproj` (e.g. via `swift package init`) if you want to open it in
-  Xcode and use its test runner — the code is already structured for it.
+is covered by the test suite's `csv export` and `csv notes/tags columns` sections.

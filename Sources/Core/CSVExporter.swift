@@ -7,7 +7,7 @@ import Foundation
 public enum CSVExporter {
 
     /// Column header, in the order the rows are emitted.
-    public static let header = "Title,Created At,Last Activity,Duration (s),Status"
+    public static let header = "Title,Created At,Last Activity,Duration (s),Status,Notes,Tags"
 
     /// Serialize `entries` to a CSV string (header + one row per entry, in the
     /// order given). An empty list yields just the header line.
@@ -20,6 +20,8 @@ public enum CSVExporter {
                 iso(entry.lastActivityAt),
                 durationString(entry, at: now),
                 entry.runningSince != nil ? "Running" : "Stopped",
+                escape(entry.notes),
+                escape(entry.tags.joined(separator: "; ")),
             ]
             lines.append(row.joined(separator: ","))
         }
