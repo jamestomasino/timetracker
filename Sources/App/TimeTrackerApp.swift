@@ -12,8 +12,12 @@ struct TimeTrackerApp: App {
     @StateObject private var vm = TrackerViewModel()
 
     var body: some Scene {
-        WindowGroup("Time Tracker") {
+        // Give the main window a stable id so the menu bar can open it
+        // reliably via the `openWindow` action (see `MenuBarContent`).
+        // The window title bar shows the app name ("Time Tracker") by default.
+        WindowGroup(id: "main") {
             ContentView(vm: vm)
+                .onAppear { configureNotifications(vm) }
         }
         .windowResizability(.contentMinSize)
         .windowStyle(.automatic)
@@ -25,12 +29,28 @@ struct TimeTrackerApp: App {
             }
         }
 
+        // The Settings window (Notifications section). Opened from the app
+        // menu (Cmd+,) or the "Settings…" buttons in the UI.
+        Settings {
+            SettingsView(vm: vm)
+                .onAppear { configureNotifications(vm) }
+        }
+
         MenuBarExtra {
             MenuBarContent(vm: vm)
+                .onAppear { configureNotifications(vm) }
         } label: {
             Image(systemName: menuBarIconName)
         }
         .menuBarExtraStyle(.window)
+    }
+
+    /// Wire the platform notification hooks into the view model. Idempotent,
+    /// so it is safe to call from every surface's `onAppear`.
+    @MainActor
+    private func configureNotifications(_ vm: TrackerViewModel) {
+        vm.postReminder = { title in AppNotifications.postBreakReminder(taskTitle: title) }
+        vm.requestAuthorization = { AppNotifications.requestAuthorization() }
     }
 
     private var menuBarIconName: String {
@@ -41,6 +61,7 @@ struct TimeTrackerApp: App {
 /// The menu-bar popover: shows the running task (if any) and quick controls.
 struct MenuBarContent: View {
     @ObservedObject var vm: TrackerViewModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -92,9 +113,21 @@ struct MenuBarContent: View {
             Divider()
 
             Button {
-                openMainWindow()
+                // Bring the app forward, then open exactly the main window by
+                // id. (We deliberately do NOT iterate `NSApp.windows` to force
+                // windows to the front — that also surfaced the hidden Help
+                // window, which is what produced the unclosable "no help" panel.)
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "main")
             } label: {
                 Label("Open Time Tracker", systemImage: "window")
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                openSettings()
+            } label: {
+                Label("Settings…", systemImage: "gearshape")
             }
             .buttonStyle(.plain)
 
@@ -109,10 +142,14 @@ struct MenuBarContent: View {
         .frame(width: 240)
     }
 
-    private func openMainWindow() {
+    /// Open the Settings window (the `Settings` scene). Works regardless of
+    /// which window is frontmost.
+    private func openSettings() {
         NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows {
-            window.makeKeyAndOrderFront(nil)
+        if #available(macOS 14, *) {
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        } else {
+            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
         }
     }
 }

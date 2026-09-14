@@ -22,12 +22,17 @@ CORE_SRC=(
   Sources/Core/TimeTrackerEngine.swift
   Sources/Core/EntryStore.swift
   Sources/Core/TimeFormat.swift
+  Sources/Core/AppSettings.swift
+  Sources/Core/BreakReminder.swift
+  Sources/Core/SettingsStore.swift
   Sources/Core/TrackerViewModel.swift
 )
 APP_SRC=(
   Sources/App/TimeTrackerApp.swift
   Sources/App/ContentView.swift
   Sources/App/TaskRow.swift
+  Sources/App/AppNotifications.swift
+  Sources/App/SettingsView.swift
 )
 TEST_SRC=(
   Tests/main.swift

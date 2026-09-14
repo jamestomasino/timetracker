@@ -347,7 +347,8 @@ MainActor.assumeIsolated {
     let toastEngine = TimeTrackerEngine(clock: clock)
     let vm = TrackerViewModel(
         engine: toastEngine,
-        store: EntryStore(engine: toastEngine, fileURL: toastDir.appendingPathComponent("entries.json"))
+        store: EntryStore(engine: toastEngine, fileURL: toastDir.appendingPathComponent("entries.json")),
+        settingsStore: SettingsStore.inMemory()
     )
     check(vm.showToast == false, "no toast shown initially")
     check(vm.toastMessage.isEmpty, "toast message empty initially")
@@ -436,6 +437,180 @@ do {
 
 // Clean up the temp store dir.
 try? FileManager.default.removeItem(at: storeDir)
+
+// MARK: - AppSettings (model + decode)
+section("app settings")
+check(AppSettings().toastEnabled == true, "toast enabled by default")
+check(AppSettings().hourlyReminderEnabled == false, "hourly reminder off by default")
+
+// A settings file written by an older version (no keys) must still load.
+do {
+    let legacy = """
+    {}
+    """
+    let decoded = try JSONDecoder().decode(AppSettings.self, from: Data(legacy.utf8))
+    check(decoded.toastEnabled == true, "legacy (empty) settings default toast on")
+    check(decoded.hourlyReminderEnabled == false, "legacy (empty) settings default reminder off")
+} catch {
+    check(false, "legacy settings decode threw: \(error)")
+}
+
+// A modern settings file round-trips.
+do {
+    let s = AppSettings(toastEnabled: false, hourlyReminderEnabled: true)
+    let back = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(s))
+    check(back == s, "modern settings round-trip")
+} catch {
+    check(false, "modern settings round-trip threw: \(error)")
+}
+
+// MARK: - BreakReminder (pure hour-boundary logic)
+section("break reminder")
+// A fixed, known calendar so the hour math is deterministic regardless of the
+// machine's time zone.
+let cal = Calendar(identifier: .gregorian)
+let base = Date(timeIntervalSince1970: 1_700_000_000) // some arbitrary instant
+
+// Two instants within the same hour share a bucket.
+let h = BreakReminder.hourBucket(for: base, calendar: cal)
+check(BreakReminder.hourBucket(for: base.addingTimeInterval(59), calendar: cal) == h,
+      "instants 59s apart share an hour bucket")
+
+// Crossing an hour boundary changes the bucket.
+let crossed = BreakReminder.hourBucket(for: base, calendar: cal).addingTimeInterval(3600)
+check(BreakReminder.hourBucket(for: crossed, calendar: cal) != h,
+      "an hour later is a different bucket")
+
+// crossedHourBoundary: nil lastBucket means "not armed yet" -> false.
+check(BreakReminder.crossedHourBoundary(now: base, lastBucket: nil, calendar: cal) == false,
+      "no prior bucket -> no fire (arms the reminder)")
+
+// Same hour -> false.
+let last = BreakReminder.hourBucket(for: base, calendar: cal)
+check(BreakReminder.crossedHourBoundary(now: base.addingTimeInterval(30), lastBucket: last, calendar: cal) == false,
+      "same hour does not fire")
+
+// New hour -> true.
+check(BreakReminder.crossedHourBoundary(now: base.addingTimeInterval(3600), lastBucket: last, calendar: cal) == true,
+      "crossing an hour boundary fires")
+
+// MARK: - SettingsStore (persistence)
+section("settings store")
+let setDir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("timetracker-settings-\(UUID().uuidString)")
+try? FileManager.default.createDirectory(at: setDir, withIntermediateDirectories: true)
+let setFile = setDir.appendingPathComponent("settings.json")
+
+do {
+    // In-memory mode: save then load returns the same value.
+    let mem = SettingsStore.inMemory()
+    mem.save(AppSettings(toastEnabled: false, hourlyReminderEnabled: true))
+    let memLoaded = mem.load()
+    check(memLoaded.toastEnabled == false, "in-memory store persists toast setting")
+    check(memLoaded.hourlyReminderEnabled == true, "in-memory store persists reminder setting")
+
+    // File mode: save then load round-trips.
+    let fileStore = SettingsStore(fileURL: setFile)
+    fileStore.save(AppSettings(toastEnabled: false, hourlyReminderEnabled: true))
+    check(FileManager.default.fileExists(atPath: setFile.path), "save writes the settings file")
+    let loaded = SettingsStore(fileURL: setFile).load()
+    check(loaded.toastEnabled == false, "file store restores toast setting")
+    check(loaded.hourlyReminderEnabled == true, "file store restores reminder setting")
+
+    // A missing file falls back to defaults (toast on, reminder off).
+    let missing = SettingsStore(fileURL: setDir.appendingPathComponent("nope.json")).load()
+    check(missing == AppSettings(), "missing file falls back to defaults")
+
+    // A corrupt file falls back to defaults, not a crash.
+    let corruptFile = setDir.appendingPathComponent("corrupt.json")
+    try "not json".write(to: corruptFile, atomically: true, encoding: .utf8)
+    check(SettingsStore(fileURL: corruptFile).load() == AppSettings(),
+          "corrupt file falls back to defaults")
+} catch {
+    check(false, "settings store tests threw: \(error)")
+}
+try? FileManager.default.removeItem(at: setDir)
+
+// MARK: - Settings wiring (ViewModel)
+section("settings wiring")
+MainActor.assumeIsolated {
+    // Capture the injected reminder side effect so we can assert on it.
+    var posted: [String] = []
+    var authRequested = false
+
+    // A fresh manual clock so we can advance time to cross an hour boundary
+    // deterministically, without disturbing the shared `clock` used elsewhere.
+    let wiringClock = ManualClock(instant: Date(timeIntervalSince1970: 1_700_000_000))
+    let wiringEngine = TimeTrackerEngine(clock: wiringClock)
+    let wiringDir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("timetracker-wiring-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: wiringDir, withIntermediateDirectories: true)
+    let vm = TrackerViewModel(
+        engine: wiringEngine,
+        store: EntryStore(engine: wiringEngine, fileURL: wiringDir.appendingPathComponent("entries.json")),
+        settingsStore: SettingsStore.inMemory(),
+        clock: wiringClock
+    )
+    vm.postReminder = { posted.append($0) }
+    vm.requestAuthorization = { authRequested = true }
+
+    // Defaults loaded from the (empty) in-memory store.
+    check(vm.settings.toastEnabled == true, "vm loads toast-enabled default")
+    check(vm.settings.hourlyReminderEnabled == false, "vm loads reminder-off default")
+
+    // setToastEnabled toggles and persists to the store.
+    vm.setToastEnabled(false)
+    check(vm.settings.toastEnabled == false, "setToastEnabled(false) flips the setting")
+    vm.setToastEnabled(true)
+    check(vm.settings.toastEnabled == true, "setToastEnabled(true) flips it back")
+
+    // Toast gating: when disabled, showToast is a no-op.
+    vm.setToastEnabled(false)
+    vm.showToast("hidden")
+    check(vm.showToast == false, "toast suppressed when disabled")
+    check(vm.toastMessage.isEmpty, "toast message untouched when disabled")
+    vm.setToastEnabled(true)
+    vm.showToast("shown")
+    check(vm.showToast == true, "toast shown when enabled")
+    check(vm.toastMessage == "shown", "toast carries the message when enabled")
+
+    // enableHourlyReminder turns it on and requests authorization.
+    vm.enableHourlyReminder()
+    check(vm.settings.hourlyReminderEnabled == true, "enableHourlyReminder turns it on")
+    check(authRequested == true, "enabling requests notification authorization")
+
+    // Reminder does not fire when nothing is running.
+    posted = []
+    vm.tick()
+    check(posted.isEmpty, "no reminder when no task is running")
+
+    // Reminder fires exactly once when a task is running and an hour boundary
+    // is crossed. Advance 2h (guaranteed to cross a boundary in any time zone)
+    // rather than exactly 1h, which would only cross a boundary near :00.
+    posted = []
+    let task = wiringEngine.add(title: "Deep work").id
+    wiringEngine.start(id: task)
+    vm.tick()                       // arms the reminder (records current hour)
+    check(posted.isEmpty, "first tick arms without firing")
+    wiringClock.advance(7200)       // cross at least one hour boundary
+    vm.tick()
+    check(posted.count == 1, "reminder fires once when a task is running")
+    check(posted.first == "Deep work", "reminder names the running task")
+
+    // A small same-hour tick does not re-fire.
+    wiringClock.advance(5)
+    vm.tick()
+    check(posted.count == 1, "same-hour tick does not re-fire")
+
+    // Disabling stops reminders.
+    vm.setHourlyReminderEnabled(false)
+    posted = []
+    wiringClock.advance(7200)
+    vm.tick()
+    check(posted.isEmpty, "reminder suppressed when disabled")
+
+    try? FileManager.default.removeItem(at: wiringDir)
+}
 
 // MARK: - Summary
 print("\n──────────────────────────────")

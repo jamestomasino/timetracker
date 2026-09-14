@@ -1,180 +1,205 @@
-import SwiftUI
+import Foundation
 import Combine
-import AppKit
 
-/// Bridges the pure engine to SwiftUI.
+#if canImport(TimeTrackerCore)
+import TimeTrackerCore
+#endif
+
+/// Bridges the pure `TimeTrackerEngine` to SwiftUI.
 ///
-/// - Owns the `TimeTrackerEngine` and `EntryStore`.
-/// - Runs a 1-second ticker that triggers UI updates while a task is running.
-/// - Exposes the search text and the derived "recent"/"filtered" lists.
+/// Exposes the engine's state as `@Published` properties and runs a 1-second
+/// ticker that re-publishes `entries` so the live elapsed-time labels update
+/// without each row needing its own timer.
+///
+/// The view model is deliberately independent of AppKit/SwiftUI so the same
+/// type can be exercised by the headless test harness. It takes a `Clock`
+/// (defaulting to the wall clock) so elapsed time and the break-reminder
+/// decision are deterministic under test. The one platform hook (posting a
+/// system notification) is injected as a closure by the app layer, keeping
+/// this file UI-framework-free.
 @MainActor
 public final class TrackerViewModel: ObservableObject {
+    @Published public var entries: [TimeEntry]
+    @Published public var searchText: String = ""
+    @Published public var toastMessage: String = ""
+    @Published public var showToast: Bool = false
+    @Published public var pendingDelete: TimeEntry?
+    /// User preferences (toast on/off, hourly reminder on/off), persisted.
+    @Published public var settings: AppSettings
+
     private let engine: TimeTrackerEngine
     private let store: EntryStore
+    private let settingsStore: SettingsStore
+    private let clock: Clock
+    private var timer: Timer?
+    private var toastResetTask: Task<Void, Never>?
+    /// Last hour bucket checked for the break reminder (`nil` = not armed).
+    private var reminderLastBucket: Date?
 
-    @Published public var searchText: String = ""
-    /// Bumped every tick so the elapsed-time views re-render.
-    @Published public private(set) var tick: Int = 0
-    /// Set when the user taps delete; the view shows a confirmation and, on
-    /// confirm, calls `confirmDelete()`. Deleting also erases the task's tracked
-    /// time, so we never do it in one irreversible tap.
-    @Published public var pendingDelete: TimeEntry?
-    /// Transient, non-blocking feedback ("as needed" toasts). Views render this
-    /// when `showToast` is true; it auto-dismisses after `toastDuration`.
-    @Published public private(set) var toastMessage: String = ""
-    @Published public private(set) var showToast: Bool = false
-    private var toastDismissal: Task<Void, Never>?
-    private var ticker: AnyCancellable?
-    private var terminateObserver: NSObjectProtocol?
+    /// Injected by the app layer: posts the break-reminder notification.
+    /// Defaults to a no-op so the type works in the headless test harness.
+    public var postReminder: ((String) -> Void)?
+    /// Injected by the app layer: requests notification authorization.
+    public var requestAuthorization: (() -> Void)?
 
-    public init() {
-        let engine = TimeTrackerEngine()
+    public init(
+        engine: TimeTrackerEngine = TimeTrackerEngine(),
+        store: EntryStore? = nil,
+        settingsStore: SettingsStore = SettingsStore(),
+        clock: Clock = SystemClock()
+    ) {
         self.engine = engine
-        self.store = EntryStore(engine: engine)
-        store.load()
-        startTicking()
-        registerTerminateHook()
+        // Default the store to one bound to the same engine, so the common
+        // `TrackerViewModel()` call works without wiring the store by hand.
+        self.store = store ?? EntryStore(engine: engine)
+        self.settingsStore = settingsStore
+        self.clock = clock
+        self.entries = engine.entries
+        self.settings = settingsStore.load()
     }
 
-    /// Injectable initializer (used by tests to avoid touching the real
-    /// Application Support file).
-    public init(engine: TimeTrackerEngine, store: EntryStore) {
-        self.engine = engine
-        self.store = store
-        store.load()
-        startTicking()
-        registerTerminateHook()
+    // MARK: - Ticker
+
+    public func startTicker() {
+        guard timer == nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.tick()
+            }
+        }
     }
 
-    // MARK: - Derived state
+    public func stopTicker() {
+        timer?.invalidate()
+        timer = nil
+    }
 
-    public var runningID: UUID? { engine.runningID }
+    /// One tick: refresh published state and fire the break reminder if due.
+    /// Exposed so the test harness can drive it deterministically.
+    public func tick() {
+        entries = engine.entries
+        maybeFireBreakReminder()
+    }
+
+    // MARK: - Break reminder
+
+    /// While a task is running and the reminder is enabled, fire once per
+    /// calendar hour. The decision is pure (see `BreakReminder`); this method
+    /// only handles the side effect of posting.
+    private func maybeFireBreakReminder() {
+        let now = clock.now()
+        guard settings.hourlyReminderEnabled, let running = engine.runningEntry else {
+            reminderLastBucket = nil
+            return
+        }
+        let bucket = BreakReminder.hourBucket(for: now)
+        if let last = reminderLastBucket {
+            guard bucket != last else { return }   // same hour: do nothing
+            reminderLastBucket = bucket
+            postReminder?(running.title)
+        } else {
+            reminderLastBucket = bucket            // first tick: arm, don't fire
+        }
+    }
+
+    /// Called when the user enables the hourly reminder: ask for permission.
+    public func enableHourlyReminder() {
+        guard settings.hourlyReminderEnabled == false else { return }
+        settings.hourlyReminderEnabled = true
+        settingsStore.save(settings)
+        requestAuthorization?()
+    }
+
+    // MARK: - Settings
+
+    /// Toggle the in-app toast notifications setting.
+    public func setToastEnabled(_ enabled: Bool) {
+        guard settings.toastEnabled != enabled else { return }
+        settings.toastEnabled = enabled
+        settingsStore.save(settings)
+    }
+
+    /// Toggle the hourly break reminder setting (no authorization side effect).
+    public func setHourlyReminderEnabled(_ enabled: Bool) {
+        guard settings.hourlyReminderEnabled != enabled else { return }
+        settings.hourlyReminderEnabled = enabled
+        if !enabled { reminderLastBucket = nil }
+        settingsStore.save(settings)
+    }
+
+    // MARK: - Commands
+
     public var runningEntry: TimeEntry? { engine.runningEntry }
-    public var recent: [TimeEntry] { engine.recent }
-    /// The most recently active task (running pinned to top). Used by the menu
-    /// bar to offer a quick start when nothing is running.
-    public var mostRecent: TimeEntry? { recent.first }
-    /// All entries, in the engine's natural (insertion) order.
-    public var entries: [TimeEntry] { engine.entries }
+    public var runningID: UUID? { engine.runningID }
+    public var mostRecent: TimeEntry? { engine.recent.first }
 
-    /// The list to display: search results if searching, else the recent list.
     public var visible: [TimeEntry] {
-        engine.search(searchText)
+        engine.search(searchText, now: clock.now())
     }
 
     public func elapsed(for entry: TimeEntry) -> TimeInterval {
-        engine.elapsed(for: entry, at: Date())
+        engine.elapsed(for: entry, at: clock.now())
     }
 
     public func isRunning(_ entry: TimeEntry) -> Bool {
         entry.runningSince != nil
     }
 
-    // MARK: - Intents
-
     public func addTask(_ title: String, start: Bool) {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        engine.add(title: trimmed, start: start)
-        afterMutation()
+        engine.add(title: title, start: start)
+        entries = engine.entries
+        store.scheduleSave()
     }
 
-    public func toggle(_ entry: TimeEntry) {
-        engine.toggle(id: entry.id)
-        afterMutation()
-    }
-
-    /// Start a task (auto-stops whatever is running).
     public func start(_ entry: TimeEntry) {
         engine.start(id: entry.id)
-        afterMutation()
+        entries = engine.entries
+        store.scheduleSave()
     }
 
     public func stop(_ entry: TimeEntry) {
         engine.stop(id: entry.id)
-        afterMutation()
+        entries = engine.entries
+        store.scheduleSave()
     }
 
-    /// Set a task's notes and/or tags from the editor.
-    public func updateNotesTags(_ entry: TimeEntry, notes: String, tags: [String]) {
-        engine.update(id: entry.id, notes: notes, tags: tags)
-        afterMutation()
+    public func toggle(_ entry: TimeEntry) {
+        engine.toggle(id: entry.id)
+        entries = engine.entries
+        store.scheduleSave()
     }
 
     public func delete(_ entry: TimeEntry) {
         pendingDelete = entry
     }
 
-    /// Actually delete the task the user confirmed. Idempotent if the entry is
-    /// already gone (e.g. a stale pending value from a prior render).
     public func confirmDelete() {
-        guard let entry = pendingDelete, engine.entry(id: entry.id) != nil else {
-            pendingDelete = nil
-            return
-        }
-        let title = entry.title
+        guard let entry = pendingDelete else { return }
         engine.delete(id: entry.id)
         pendingDelete = nil
-        afterMutation()
-        // Destructive and irreversible — confirm it landed.
-        showToast("Deleted \"\(title)\"")
+        entries = engine.entries
+        store.scheduleSave()
+        showToast("Deleted \"\(entry.title)\"")
     }
 
-    // MARK: - Toasts
-
-    /// How long a toast stays on screen before auto-dismissing.
-    public static let toastDuration: TimeInterval = 2.5
-
-    /// Show a transient toast. A pending dismissal is cancelled first, so rapid
-    /// toasts don't stack or dismiss each other early.
-    public func showToast(_ message: String) {
-        toastDismissal?.cancel()
-        toastMessage = message
-        showToast = true
-        toastDismissal = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.toastDuration * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            self?.showToast = false
-        }
-    }
-
-    // MARK: - Ticking
-
-    private func startTicking() {
-        ticker = Timer.publish(every: 1, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in
-                guard let self else { return }
-                // Only bump when something is actually running to avoid needless work.
-                if self.engine.runningID != nil {
-                    self.tick &+= 1
-                }
-            }
-    }
-
-    private func afterMutation() {
-        tick &+= 1
+    public func updateNotesTags(_ entry: TimeEntry, notes: String, tags: [String]) {
+        engine.update(id: entry.id, notes: notes, tags: tags)
+        entries = engine.entries
         store.scheduleSave()
     }
 
-    /// Flush pending state synchronously when the app is about to quit, so we
-    /// never lose tracked time to the save debounce window. `deinit` remains a
-    /// fallback, but `willTerminate` is the reliable hook.
-    private func registerTerminateHook() {
-        terminateObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.store.saveNow()
-        }
-    }
+    // MARK: - Toast
 
-    deinit {
-        if let observer = terminateObserver {
-            NotificationCenter.default.removeObserver(observer)
+    /// Show a transient toast, gated by the toast-enabled setting.
+    public func showToast(_ message: String) {
+        guard settings.toastEnabled else { return }
+        toastMessage = message
+        showToast = true
+        toastResetTask?.cancel()
+        toastResetTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000) // 2.5s
+            guard !Task.isCancelled else { return }
+            self?.showToast = false
         }
-        ticker?.cancel()
-        store.saveNow()
     }
 }
