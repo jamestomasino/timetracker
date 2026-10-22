@@ -83,15 +83,21 @@ Sources/
   Core/
     TimeEntry.swift           # model + parseTags + Clock abstraction
     TimeTrackerEngine.swift   # pure state machine (no UI, no I/O) — fully testable
-    EntryStore.swift          # JSON persistence to Application Support
+    TimeBuckets.swift         # WeekStart enum + day/week bucketing for the "by week" export
+    EntryStore.swift          # JSON persistence to Application Support (backup + corrupt-file recovery)
     TimeFormat.swift          # h:mm:ss / mm:ss formatting
     CSVExporter.swift         # RFC-4180 CSV serialization (notes + tags columns)
-    TrackerViewModel.swift    # ObservableObject bridge + 1s ticker + notes/tags update
+    AppSettings.swift         # user preferences (break reminder, week start) — lenient decoding
+    BreakReminder.swift       # pure hourly-reminder decision logic (clock-injected, deterministic)
+    SettingsStore.swift       # JSON persistence for AppSettings (in-memory mode for tests)
+    TrackerViewModel.swift    # ObservableObject bridge + 1s ticker + notes/tags + break-reminder wiring
     ToastCenter.swift         # transient toast state + auto-dismiss timer (VM forwards its changes)
   App/
     TimeTrackerApp.swift      # @main, small window + MenuBarExtra
     ContentView.swift         # header, add row, search, list, export toast
     TaskRow.swift             # one task row: title, tags, notes, play/stop, edit, delete
+    AppNotifications.swift    # UNUserNotificationCenter wrapper for the break reminder (app layer only)
+    SettingsView.swift        # Settings window (Notifications, Export sections)
 Resources/                    # (reserved)
 Tests/
   main.swift                  # assertion harness for the engine
