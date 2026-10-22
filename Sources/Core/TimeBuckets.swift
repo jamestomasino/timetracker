@@ -118,16 +118,6 @@ public enum TimeBuckets {
         return calendar.date(byAdding: .day, value: -offset, to: dayStart) ?? dayStart
     }
 
-    /// Last day of the week (local midnight) containing `date`.
-    public static func weekEnd(
-        for date: Date,
-        calendar: Calendar = Calendar.current,
-        weekStart: WeekStart = .monday
-    ) -> Date {
-        let ws = TimeBuckets.weekStart(for: date, calendar: calendar, weekStart: weekStart)
-        return calendar.date(byAdding: .day, value: 6, to: ws) ?? ws
-    }
-
     /// The `yyyy-MM-dd` key of the first day of the week containing `date`.
     /// Convenience wrapper over `weekStart` for callers that want a stable
     /// string key rather than a `Date`.

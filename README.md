@@ -35,7 +35,7 @@ stay at the top, and you can search the full list by title, notes, or tag.
 - **Safe delete**: deleting a task asks for confirmation first, since it also
   erases that task's tracked time.
 - **Testable core**: the engine is deterministic (injectable clock) and covered by a
-  lightweight test suite (131 checks).
+  lightweight test suite (208 checks).
 
 ## Requirements
 

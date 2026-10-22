@@ -105,19 +105,6 @@ public struct TimeEntry: Identifiable, Codable, Hashable, Sendable {
         }
         return result
     }
-
-    /// True when any of this entry's tracked time falls inside `window`.
-    /// Used by the export date-range filter to decide whether the entry
-    /// contributes to the export at all.
-    public func inWindow(
-        _ window: TimeWindow,
-        at now: Date = Date(),
-        calendar: Calendar = Calendar.current
-    ) -> Bool {
-        dayBreakdown(at: now, calendar: calendar).keys.contains { key in
-            TimeBuckets.dayInWindow(key, window, calendar: calendar)
-        }
-    }
 }
 
 /// Parse a raw tag string into normalized tags.

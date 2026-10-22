@@ -19,18 +19,4 @@ public enum BreakReminder {
         let comps = calendar.dateComponents([.year, .month, .day, .hour], from: date)
         return calendar.date(from: comps) ?? date
     }
-
-    /// True when `now` is in a different hour bucket than `lastBucket`, i.e. we
-    /// have crossed an hour boundary since the last check.
-    ///
-    /// A `nil` `lastBucket` means "we have not checked yet" and returns false,
-    /// so the first tick arms the reminder instead of firing it immediately.
-    public static func crossedHourBoundary(
-        now: Date,
-        lastBucket: Date?,
-        calendar: Calendar = Calendar.current
-    ) -> Bool {
-        guard let lastBucket else { return false }
-        return hourBucket(for: now, calendar: calendar) != lastBucket
-    }
 }

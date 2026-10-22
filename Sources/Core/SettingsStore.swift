@@ -14,22 +14,27 @@ public final class SettingsStore {
     private let fileURL: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
-    private var memoryOnly = false
+    private let memoryOnly: Bool
     private var memoryValue: AppSettings?
 
-    public init(fileURL: URL = SettingsStore.defaultFileURL()) {
+    public convenience init(fileURL: URL = SettingsStore.defaultFileURL()) {
+        self.init(fileURL: fileURL, memoryOnly: false, initial: nil)
+    }
+
+    private init(fileURL: URL, memoryOnly: Bool, initial: AppSettings?) {
         self.fileURL = fileURL
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         self.decoder = JSONDecoder()
+        self.memoryOnly = memoryOnly
+        self.memoryValue = initial
     }
 
     /// A store that keeps its value in memory and never touches disk.
-    public static func inMemory(_ initial: AppSettings = AppSettings()) -> SettingsStore {
-        let store = SettingsStore(fileURL: URL(fileURLWithPath: "/dev/null/settings.json"))
-        store.memoryOnly = true
-        store.memoryValue = initial
-        return store
+    /// Intended for tests and previews where persistence would be surprising.
+    public static func inMemory() -> SettingsStore {
+        SettingsStore(fileURL: URL(fileURLWithPath: "/dev/null/settings.json"),
+                      memoryOnly: true, initial: AppSettings())
     }
 
     /// ~/Library/Application Support/TimeTracker/settings.json

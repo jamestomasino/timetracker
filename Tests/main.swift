@@ -354,19 +354,6 @@ if let l30 = TimeBuckets.window(for: .last30Days, now: march15, calendar: dayCal
     check(false, "last-30-days window should not be nil")
 }
 
-// inWindow: entries inside the window pass; outside are excluded.
-let inside = TimeEntry(id: UUID(), title: "in", accumulated: 10, runningSince: nil,
-                       createdAt: march15, lastActivityAt: march15)
-let outside = TimeEntry(id: UUID(), title: "out", accumulated: 10, runningSince: nil,
-                        createdAt: march15.addingTimeInterval(-40 * 86400),
-                        lastActivityAt: march15.addingTimeInterval(-40 * 86400))
-if let w = TimeBuckets.window(for: .last30Days, now: march15, calendar: dayCal, weekStart: .monday) {
-    check(inside.inWindow(w), "entry inside the window passes the filter")
-    check(!outside.inWindow(w), "entry outside the window is filtered out")
-} else {
-    check(false, "window should not be nil for inWindow check")
-}
-
 // MARK: - CSV export
 section("csv export")
 let csvNow = Date(timeIntervalSince1970: 1_000_000)
@@ -896,19 +883,6 @@ check(BreakReminder.hourBucket(for: base.addingTimeInterval(59), calendar: cal) 
 let crossed = BreakReminder.hourBucket(for: base, calendar: cal).addingTimeInterval(3600)
 check(BreakReminder.hourBucket(for: crossed, calendar: cal) != h,
       "an hour later is a different bucket")
-
-// crossedHourBoundary: nil lastBucket means "not armed yet" -> false.
-check(BreakReminder.crossedHourBoundary(now: base, lastBucket: nil, calendar: cal) == false,
-      "no prior bucket -> no fire (arms the reminder)")
-
-// Same hour -> false.
-let last = BreakReminder.hourBucket(for: base, calendar: cal)
-check(BreakReminder.crossedHourBoundary(now: base.addingTimeInterval(30), lastBucket: last, calendar: cal) == false,
-      "same hour does not fire")
-
-// New hour -> true.
-check(BreakReminder.crossedHourBoundary(now: base.addingTimeInterval(3600), lastBucket: last, calendar: cal) == true,
-      "crossing an hour boundary fires")
 
 // MARK: - SettingsStore (persistence)
 section("settings store")

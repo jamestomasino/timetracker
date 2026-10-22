@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Persists the engine's snapshot to a JSON file in Application Support.
 ///
@@ -83,7 +84,12 @@ public final class EntryStore {
             try data.write(to: fileURL, options: .atomic)
         } catch {
             // On any failure the existing file is left intact (atomic write +
-            // backup rotation means there is nothing to roll back).
+            // backup rotation means there is nothing to roll back). But a failed
+            // save of tracked time is exactly the kind of thing that should not
+            // be silent — log it so a disk-full or permission problem is visible
+            // in Console.
+            os_log(.error, "TimeTracker: failed to save entries: %{public}@",
+                   error.localizedDescription)
         }
     }
 }
